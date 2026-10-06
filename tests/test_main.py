@@ -13,7 +13,7 @@ Run these tests with:
 """
 
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -45,6 +45,22 @@ def test_parse_arguments_default():
         args = parse_arguments()
         assert args.mode == "stdio"
         assert args.port == 8000
+
+
+@pytest.mark.unit
+def test_parse_arguments_host_default_and_env(mock_env_vars):
+    """HTTP host defaults to loopback; MCP_HOST / --host override it."""
+    from main import parse_arguments
+
+    with patch.dict(os.environ, {"MCP_HOST": ""}):
+        os.environ.pop("MCP_HOST")
+        with patch("sys.argv", ["main.py"]):
+            assert parse_arguments().host == "127.0.0.1"
+    with patch.dict(os.environ, {"MCP_HOST": "0.0.0.0"}):
+        with patch("sys.argv", ["main.py"]):
+            assert parse_arguments().host == "0.0.0.0"
+        with patch("sys.argv", ["main.py", "--host", "10.0.0.5"]):
+            assert parse_arguments().host == "10.0.0.5"
 
 
 @pytest.mark.unit
@@ -98,37 +114,6 @@ def test_parse_arguments_cli_overrides_env(mock_env_vars):
             assert args.port == 7000
 
 
-@pytest.mark.asyncio
-@pytest.mark.unit
-async def test_initialize_components(mock_env_vars):
-    """Test component initialization."""
-    from main import initialize_components
-
-    with patch.dict(os.environ, mock_env_vars):
-        # Mock the component classes
-        with (
-            patch("main.EndpointSearcherChroma") as mock_searcher_class,
-            patch("main.EnhancedNautobotKnowledge") as mock_kb_class,
-        ):
-            # Create mock instances
-            mock_searcher = MagicMock()
-            mock_searcher.initialize_collection = MagicMock()
-            mock_searcher_class.return_value = mock_searcher
-
-            mock_kb = MagicMock()
-            mock_kb.initialize_all_repositories = MagicMock()
-            mock_kb_class.return_value = mock_kb
-
-            # Run initialization
-            searcher, kb = await initialize_components()
-
-            # Verify components were created
-            assert searcher is not None
-            assert kb is not None
-            mock_searcher.initialize_collection.assert_called_once()
-            mock_kb.initialize_all_repositories.assert_called_once()
-
-
 @pytest.mark.unit
 def test_imports():
     """Test that main.py can be imported without errors."""
@@ -136,7 +121,8 @@ def test_imports():
 
     assert hasattr(main, "main")
     assert hasattr(main, "parse_arguments")
-    assert hasattr(main, "initialize_components")
+    assert hasattr(main, "build_http_app")
+    assert hasattr(main, "serve_http")
     assert hasattr(main, "run_stdio_mode")
     assert hasattr(main, "run_http_mode")
 

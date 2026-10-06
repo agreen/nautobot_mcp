@@ -1,3 +1,4 @@
+import hashlib
 import logging
 from pathlib import Path
 from typing import List, Optional
@@ -65,15 +66,42 @@ class EndpointSearcherChroma:
                     cleaned[key] = json.dumps(value)
         return cleaned
 
-    def initialize_collection(self) -> None:
+    # Chroma rejects single add/upsert calls above its max batch size (~5.4k)
+    _UPSERT_BATCH_SIZE = 500
+
+    @property
+    def _hash_file(self) -> Path:
+        return Path(self.db_path) / ".schema_hash"
+
+    def initialize_collection(self, force: bool = False) -> bool:
+        """Fetch the Swagger schema and (re)index it.
+
+        Embedding thousands of endpoints is slow, so indexing is skipped when the schema
+        is byte-identical to the one already indexed (unless ``force`` is set).
+
+        Returns:
+            True if the index is up to date afterwards, False if the schema could not be
+            fetched or indexed (previously indexed data, if any, is left untouched).
+        """
         try:
             headers = {"Authorization": f"Token {self.token}"} if self.token else {}
             response = requests.get(
-                self.base_url, headers=headers, verify=config.SSL_VERIFY
+                self.base_url,
+                headers=headers,
+                verify=config.SSL_VERIFY,
+                timeout=config.SCHEMA_TIMEOUT,
             )
             response.raise_for_status()
             data = response.json()
             logger.info("Fetched Swagger/OpenAPI schema.")
+
+            schema_hash = hashlib.sha256(response.content).hexdigest()
+            if not force and self._schema_unchanged(schema_hash):
+                logger.info(
+                    "Schema unchanged since last index; skipping re-embedding "
+                    f"({self.collection.count()} endpoints already indexed)."
+                )
+                return True
 
             documents = []
             metadatas = []
@@ -95,10 +123,36 @@ class EndpointSearcherChroma:
                     metadatas.append(cleaned_metadata)
                     ids.append(f"{method.upper()} {path}")
 
-            self.collection.add(documents=documents, metadatas=metadatas, ids=ids)
+            # upsert (not add): re-running against a persisted collection must not fail
+            # or duplicate entries.
+            for start in range(0, len(ids), self._UPSERT_BATCH_SIZE):
+                end = start + self._UPSERT_BATCH_SIZE
+                self.collection.upsert(
+                    documents=documents[start:end],
+                    metadatas=metadatas[start:end],
+                    ids=ids[start:end],
+                )
+            self._write_schema_hash(schema_hash)
             logger.info(f"Successfully indexed {len(documents)} endpoints.")
+            return True
         except Exception as e:
             logger.error(f"Failed to initialize endpoints: {e}")
+            return False
+
+    def _schema_unchanged(self, schema_hash: str) -> bool:
+        try:
+            return (
+                self._hash_file.read_text().strip() == schema_hash
+                and self.collection.count() > 0
+            )
+        except Exception:
+            return False
+
+    def _write_schema_hash(self, schema_hash: str) -> None:
+        try:
+            self._hash_file.write_text(schema_hash)
+        except Exception as e:
+            logger.warning(f"Could not persist schema hash: {e}")
 
     def search(self, query: str, n_results: int = 5) -> Optional[List[dict]]:
         try:

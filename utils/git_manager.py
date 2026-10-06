@@ -6,6 +6,7 @@ for the knowledge base system.
 
 import json
 import logging
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -25,13 +26,14 @@ class GitRepoManager:
         """Initialize the Git repository manager.
 
         Args:
-            cache_dir: Directory to store cloned repositories. If None, uses temp directory.
+            cache_dir: Directory to store cloned repositories. If None, uses the
+                ``NAUTOBOT_MCP_REPO_CACHE`` env var, else a temp directory. Point the env
+                var at a persistent volume so restarts don't re-clone and re-index.
         """
-        self.cache_dir = (
-            Path(cache_dir)
-            if cache_dir
-            else Path(tempfile.gettempdir()) / "nautobot_mcp_repos"
+        default_dir = os.getenv("NAUTOBOT_MCP_REPO_CACHE") or str(
+            Path(tempfile.gettempdir()) / "nautobot_mcp_repos"
         )
+        self.cache_dir = Path(cache_dir) if cache_dir else Path(default_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.metadata_file = self.cache_dir / "repo_metadata.json"
         self.metadata = self._load_metadata()

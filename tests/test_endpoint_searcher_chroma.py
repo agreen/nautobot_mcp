@@ -10,7 +10,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 import pytest
 import requests
@@ -236,6 +236,7 @@ class TestEndpointSearcherChroma:
         # Setup mock response
         mock_response = Mock()
         mock_response.json.return_value = sample_openapi_schema
+        mock_response.content = b"schema"
         mock_get.return_value = mock_response
 
         mock_searcher.initialize_collection()
@@ -245,12 +246,13 @@ class TestEndpointSearcherChroma:
             "http://test.com/api/swagger.json",
             headers={"Authorization": "Token test_token_123"},
             verify=True,
+            timeout=ANY,
         )
         mock_response.raise_for_status.assert_called_once()
 
-        # Verify collection.add was called
-        mock_searcher.collection.add.assert_called_once()
-        call_args = mock_searcher.collection.add.call_args
+        # Verify collection.upsert was called
+        mock_searcher.collection.upsert.assert_called_once()
+        call_args = mock_searcher.collection.upsert.call_args
 
         # Check that correct number of documents were added
         documents = call_args.kwargs["documents"]
@@ -283,13 +285,17 @@ class TestEndpointSearcherChroma:
         mock_searcher.token = ""
         mock_response = Mock()
         mock_response.json.return_value = sample_openapi_schema
+        mock_response.content = b"schema"
         mock_get.return_value = mock_response
 
         mock_searcher.initialize_collection()
 
         # Verify API call without Authorization header
         mock_get.assert_called_once_with(
-            "http://test.com/api/swagger.json", headers={}, verify=False
+            "http://test.com/api/swagger.json",
+            headers={},
+            verify=False,
+            timeout=ANY,
         )
 
     @patch("helpers.endpoint_searcher_chroma.requests.get")
@@ -300,7 +306,7 @@ class TestEndpointSearcherChroma:
         # Should not raise exception, but log error
         mock_searcher.initialize_collection()
 
-        mock_searcher.collection.add.assert_not_called()
+        mock_searcher.collection.upsert.assert_not_called()
 
     @patch("helpers.endpoint_searcher_chroma.requests.get")
     def test_initialize_collection_http_error(self, mock_get, mock_searcher):
@@ -312,7 +318,7 @@ class TestEndpointSearcherChroma:
         # Should not raise exception, but log error
         mock_searcher.initialize_collection()
 
-        mock_searcher.collection.add.assert_not_called()
+        mock_searcher.collection.upsert.assert_not_called()
 
     @patch("helpers.endpoint_searcher_chroma.requests.get")
     def test_initialize_collection_invalid_json(self, mock_get, mock_searcher):
@@ -324,7 +330,7 @@ class TestEndpointSearcherChroma:
         # Should not raise exception, but log error
         mock_searcher.initialize_collection()
 
-        mock_searcher.collection.add.assert_not_called()
+        mock_searcher.collection.upsert.assert_not_called()
 
     @patch("helpers.endpoint_searcher_chroma.requests.get")
     def test_initialize_collection_empty_paths(self, mock_get, mock_searcher):
@@ -332,14 +338,13 @@ class TestEndpointSearcherChroma:
         empty_schema = {"paths": {}}
         mock_response = Mock()
         mock_response.json.return_value = empty_schema
+        mock_response.content = b"schema"
         mock_get.return_value = mock_response
 
         mock_searcher.initialize_collection()
 
-        # Should still call add but with empty lists
-        mock_searcher.collection.add.assert_called_once_with(
-            documents=[], metadatas=[], ids=[]
-        )
+        # Nothing to index, so nothing is upserted (and indexing still "succeeds")
+        mock_searcher.collection.upsert.assert_not_called()
 
     def test_search_success(self, mock_searcher):
         """Test successful search operation."""
@@ -501,11 +506,12 @@ class TestEndpointSearcherChroma:
         with patch("helpers.endpoint_searcher_chroma.requests.get") as mock_get:
             mock_response = Mock()
             mock_response.json.return_value = sample_openapi_schema
+            mock_response.content = b"schema"
             mock_get.return_value = mock_response
 
             mock_searcher.initialize_collection()
 
-            call_args = mock_searcher.collection.add.call_args
+            call_args = mock_searcher.collection.upsert.call_args
             metadatas = call_args.kwargs["metadatas"]
 
             # Find metadata with parameters (should be serialized as JSON string)
@@ -596,6 +602,7 @@ class TestEndpointSearcherChroma:
 
             mock_response = Mock()
             mock_response.json.return_value = sample_openapi_schema
+            mock_response.content = b"schema"
             mock_get.return_value = mock_response
 
             # Create searcher and initialize
@@ -603,7 +610,7 @@ class TestEndpointSearcherChroma:
             searcher.initialize_collection()
 
             # Verify initialization
-            mock_collection.add.assert_called_once()
+            mock_collection.upsert.assert_called_once()
 
             # Setup search mock
             mock_collection.query.return_value = {
@@ -618,3 +625,88 @@ class TestEndpointSearcherChroma:
             assert result is not None
             assert len(result) == 1
             assert "devices" in result[0]["document"]
+
+
+class TestInitializeCollectionRobustness:
+    """Behaviors added for non-blocking / restart-safe startup."""
+
+    @pytest.fixture
+    def searcher(self, tmp_path):
+        with (
+            patch("helpers.endpoint_searcher_chroma.config") as cfg,
+            patch("helpers.endpoint_searcher_chroma.PersistentClient"),
+            patch(
+                "helpers.endpoint_searcher_chroma.SentenceTransformerEmbeddingFunction"
+            ),
+            patch(
+                "helpers.endpoint_searcher_chroma.get_chroma_db_path",
+                return_value=str(tmp_path),
+            ),
+        ):
+            cfg.GLOBAL_TOOL_PROMPT = "http://test.com/api/swagger.json"
+            cfg.NAUTOBOT_TOKEN = ""
+            cfg.EMBEDDING_MODEL = "m"
+            cfg.SSL_VERIFY = True
+            cfg.SCHEMA_TIMEOUT = 7
+            instance = EndpointSearcherChroma()
+            Path(instance.db_path).mkdir(parents=True, exist_ok=True)
+            yield instance
+
+    @staticmethod
+    def _schema(n):
+        return {
+            "paths": {
+                f"/api/x{i}/": {"get": {"operationId": f"x{i}", "description": "d"}}
+                for i in range(n)
+            }
+        }
+
+    @staticmethod
+    def _response(schema, raw=b"raw-schema"):
+        r = Mock()
+        r.json.return_value = schema
+        r.content = raw
+        return r
+
+    def test_upserts_in_batches(self, searcher):
+        with patch("helpers.endpoint_searcher_chroma.requests.get") as get:
+            get.return_value = self._response(self._schema(1201))
+            assert searcher.initialize_collection() is True
+        sizes = [
+            len(c.kwargs["ids"]) for c in searcher.collection.upsert.call_args_list
+        ]
+        assert sizes == [500, 500, 201]
+
+    def test_uses_configured_schema_timeout(self, searcher):
+        with patch("helpers.endpoint_searcher_chroma.requests.get") as get:
+            get.return_value = self._response(self._schema(1))
+            searcher.initialize_collection()
+        assert get.call_args.kwargs["timeout"] == 7
+
+    def test_skips_reembedding_when_schema_unchanged(self, searcher):
+        searcher.collection.count.return_value = 10
+        with patch("helpers.endpoint_searcher_chroma.requests.get") as get:
+            get.return_value = self._response(self._schema(3))
+            assert searcher.initialize_collection() is True  # first run indexes
+            assert searcher.collection.upsert.call_count == 1
+            assert searcher.initialize_collection() is True  # unchanged -> skipped
+            assert searcher.collection.upsert.call_count == 1
+            assert searcher.initialize_collection(force=True) is True  # forced
+            assert searcher.collection.upsert.call_count == 2
+
+    def test_reindexes_when_schema_changes(self, searcher):
+        searcher.collection.count.return_value = 10
+        with patch("helpers.endpoint_searcher_chroma.requests.get") as get:
+            get.return_value = self._response(self._schema(3), raw=b"v1")
+            searcher.initialize_collection()
+            get.return_value = self._response(self._schema(3), raw=b"v2")
+            searcher.initialize_collection()
+        assert searcher.collection.upsert.call_count == 2
+
+    def test_returns_false_when_nautobot_unreachable(self, searcher):
+        with patch(
+            "helpers.endpoint_searcher_chroma.requests.get",
+            side_effect=requests.ConnectionError("down"),
+        ):
+            assert searcher.initialize_collection() is False
+        searcher.collection.upsert.assert_not_called()

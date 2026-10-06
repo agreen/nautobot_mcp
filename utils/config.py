@@ -55,6 +55,8 @@ class Config:
 
     # Request Timeouts
     API_TIMEOUT: int = int(os.getenv("API_TIMEOUT", "10"))
+    # Fetching the full Swagger schema can be slow on a large Nautobot instance
+    SCHEMA_TIMEOUT: int = int(os.getenv("SCHEMA_TIMEOUT", "120"))
 
     # SSL Configuration
     SSL_VERIFY: bool = os.getenv("SSL_VERIFY", "true").lower() in ("true", "1", "yes")
@@ -83,5 +85,6 @@ class Config:
 # Create a global config instance
 config = Config()
 
-# Validate configuration on import
-config.validate()
+# NOTE: ``config.validate()`` is intentionally NOT called at import time. It issues
+# several blocking HTTP requests (5s timeout each) whose results were discarded, and it
+# ran before the MCP handshake. Run ``python -m utils.validate_config`` to validate.

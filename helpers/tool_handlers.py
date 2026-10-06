@@ -3,22 +3,25 @@ Common tool handlers for both server.py and server_http.py.
 This module contains the implementation logic for all MCP tools to avoid code duplication.
 """
 
+import asyncio
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import requests
 
-from helpers.endpoint_searcher_chroma import EndpointSearcherChroma
-from helpers.nb_kb_v2 import EnhancedNautobotKnowledge
 from utils.config import config
 from utils.repo_config import RepositoryConfig, RepositoryConfigManager
+
+if TYPE_CHECKING:  # heavy modules (torch) - never import them at server startup
+    from helpers.endpoint_searcher_chroma import EndpointSearcherChroma
+    from helpers.nb_kb_v2 import EnhancedNautobotKnowledge
 
 logger = logging.getLogger("nautobot_mcp")
 
 
 async def handle_api_request_schema(
-    query: str, n_results: int, endpoint_searcher: EndpointSearcherChroma
+    query: str, n_results: int, endpoint_searcher: "EndpointSearcherChroma"
 ) -> str:
     """
     Handle API schema search requests.
@@ -34,7 +37,9 @@ async def handle_api_request_schema(
     logger.info(
         f"Searching endpoint index for query: '{query}' with n_results={n_results}"
     )
-    results = endpoint_searcher.search(query, n_results=n_results)
+    results = await asyncio.to_thread(
+        endpoint_searcher.search, query, n_results=n_results
+    )
     response_data = {
         "api_base_url": endpoint_searcher.base_url,
         "matching_endpoints": results,
@@ -132,7 +137,7 @@ async def handle_dynamic_api_request(
 
 
 async def handle_refresh_endpoint_index(
-    endpoint_searcher: EndpointSearcherChroma,
+    endpoint_searcher: "EndpointSearcherChroma",
 ) -> str:
     """
     Handle endpoint index refresh requests.
@@ -144,12 +149,14 @@ async def handle_refresh_endpoint_index(
         Success message string
     """
     logger.info("Manual endpoint index refresh triggered.")
-    endpoint_searcher.initialize_collection()
+    ok = await asyncio.to_thread(endpoint_searcher.initialize_collection, True)
+    if not ok:
+        return "Endpoint index refresh failed; see server logs. Existing index left unchanged."
     return "Endpoint index refreshed successfully."
 
 
 async def handle_kb_semantic_search(
-    query: str, n_results: int, nautobot_kb: EnhancedNautobotKnowledge
+    query: str, n_results: int, nautobot_kb: "EnhancedNautobotKnowledge"
 ) -> str:
     """
     Handle semantic search in the Nautobot knowledge base.
@@ -167,7 +174,8 @@ async def handle_kb_semantic_search(
     )
 
     # Use the optimized search method directly
-    optimized_results = nautobot_kb.search_optimized_for_llm(
+    optimized_results = await asyncio.to_thread(
+        nautobot_kb.search_optimized_for_llm,
         query=query,
         n_results=n_results,
         max_content_length=300,  # Optimal length for LLM consumption
@@ -300,7 +308,7 @@ async def handle_remove_repo(repo: str) -> str:
 
 
 async def handle_update_repos(
-    nautobot_kb: EnhancedNautobotKnowledge,
+    nautobot_kb: "EnhancedNautobotKnowledge",
     repo: Optional[str] = None,
     force: bool = False,
 ) -> str:
@@ -326,7 +334,9 @@ async def handle_update_repos(
                     "message": f"Repository {repo} not found in configuration",
                 }
             else:
-                success = nautobot_kb.update_repository(repo_config, force)
+                success = await asyncio.to_thread(
+                    nautobot_kb.update_repository, repo_config, force
+                )
                 if success:
                     response = {
                         "status": "success",
@@ -338,7 +348,9 @@ async def handle_update_repos(
                         "message": f"{repo} was already up to date or failed to update",
                     }
         else:
-            results = nautobot_kb.initialize_all_repositories(force)
+            results = await asyncio.to_thread(
+                nautobot_kb.initialize_all_repositories, force
+            )
             updated_count = sum(results.values())
             response = {
                 "status": "success",
@@ -358,7 +370,7 @@ async def handle_update_repos(
 
 
 async def handle_init_repos(
-    nautobot_kb: EnhancedNautobotKnowledge, force: bool = False
+    nautobot_kb: "EnhancedNautobotKnowledge", force: bool = False
 ) -> str:
     """
     Handle repository initialization requests.
@@ -371,7 +383,9 @@ async def handle_init_repos(
         JSON string containing initialization results
     """
     try:
-        results = nautobot_kb.initialize_all_repositories(force)
+        results = await asyncio.to_thread(
+            nautobot_kb.initialize_all_repositories, force
+        )
         updated_count = sum(results.values())
 
         response = {
@@ -392,7 +406,7 @@ async def handle_init_repos(
     return json.dumps(response, indent=2)
 
 
-async def handle_repo_status(nautobot_kb: EnhancedNautobotKnowledge) -> str:
+async def handle_repo_status(nautobot_kb: "EnhancedNautobotKnowledge") -> str:
     """
     Handle repository status requests.
 
@@ -406,7 +420,7 @@ async def handle_repo_status(nautobot_kb: EnhancedNautobotKnowledge) -> str:
     all_repos = config_manager.load_repositories()
 
     try:
-        stats = nautobot_kb.get_repository_stats()
+        stats = await asyncio.to_thread(nautobot_kb.get_repository_stats)
 
         repos_status = []
         for repo in all_repos:
