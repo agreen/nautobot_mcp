@@ -173,7 +173,7 @@ docker compose up -d
 docker run -d \
   --name nautobot-mcp \
   --env-file .env \
-  -v nautobot-mcp-chroma:/app/backend/chroma_db \
+  -v nautobot-mcp-data:/data \
   -v nautobot-mcp-models:/app/backend/models \
   nautobot-mcp:latest --mode stdio
 ```
@@ -190,7 +190,7 @@ docker run -d \
   -e MCP_TRANSPORT=http \
   -e MCP_PORT=8000 \
   -p 8000:8000 \
-  -v nautobot-mcp-chroma:/app/backend/chroma_db \
+  -v nautobot-mcp-data:/data \
   -v nautobot-mcp-models:/app/backend/models \
   nautobot-mcp:latest --mode http --port 8000
 ```
@@ -285,7 +285,7 @@ Add to your VS Code MCP settings to use with GitHub Copilot:
 				"--env-file",
 				"/path/to/nautobot_mcp/.env",
 				"-v",
-				"nautobot-mcp-chroma:/app/backend/chroma_db",
+				"nautobot-mcp-data:/data",
 				"-v",
 				"nautobot-mcp-models:/app/backend/models",
 				"nautobot-mcp:latest",
@@ -301,7 +301,7 @@ Add to your VS Code MCP settings to use with GitHub Copilot:
 ### Docker Configuration Notes
 
 **Data Persistence:**
-- ChromaDB data is stored in the `nautobot-mcp-chroma` volume
+- ChromaDB data is stored in the `nautobot-mcp-data` volume
 - Sentence transformer models are cached in the `nautobot-mcp-models` volume
 - Volumes persist across container restarts and rebuilds
 - To reset the knowledge base, remove the volumes: `docker compose down -v`
@@ -635,7 +635,7 @@ uv run python -c "from server import main; print('Server imports OK')"
    docker volume ls | grep nautobot-mcp
    
    # Inspect volume
-   docker volume inspect nautobot-mcp-chroma
+   docker volume inspect nautobot-mcp-data
    ```
 
 6. **Building Behind Corporate Proxy**:

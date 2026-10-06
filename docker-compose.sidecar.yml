@@ -1,0 +1,46 @@
+# Nautobot MCP as a sidecar of an existing Nautobot docker-compose stack.
+#
+# Either merge the `nautobot-mcp` service + volume below into your Nautobot compose file,
+# or layer this file on top of it:
+#
+#   docker compose -f docker-compose.yml -f /path/to/nautobot_mcp/docker-compose.sidecar.yml up -d --build nautobot-mcp
+#
+# Adjust:
+#   * build.context      - path (or git URL) of this repository
+#   * NAUTOBOT_LOCAL_BASE_URL - the compose service name / port of your Nautobot web container
+#   * NAUTOBOT_LOCAL_TOKEN    - an API token for a dedicated Nautobot user
+#
+# MCP clients connect to  http://nautobot-mcp:8000/mcp/  (from inside the compose network).
+services:
+  nautobot-mcp:
+    build:
+      context: ${NAUTOBOT_MCP_CONTEXT:-../nautobot_mcp}
+    image: nautobot-mcp:latest
+    restart: unless-stopped
+    environment:
+      NAUTOBOT_ENV: local
+      NAUTOBOT_LOCAL_BASE_URL: ${NAUTOBOT_MCP_NAUTOBOT_URL:-http://nautobot:8080/}
+      NAUTOBOT_LOCAL_TOKEN: ${NAUTOBOT_MCP_TOKEN:?set NAUTOBOT_MCP_TOKEN to a Nautobot API token}
+      SSL_VERIFY: ${NAUTOBOT_MCP_SSL_VERIFY:-false}
+      MCP_TRANSPORT: http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8000"
+      TOKENIZERS_PARALLELISM: "false"
+    # No `ports:` on purpose: the endpoint is unauthenticated and can write to Nautobot.
+    # Reach it over the compose network. To test from the host, add: "127.0.0.1:8000:8000"
+    expose:
+      - "8000"
+    volumes:
+      - nautobot-mcp-data:/data
+    # Only a start-order hint: the MCP server answers its handshake immediately and keeps
+    # retrying the Swagger fetch in the background until Nautobot is reachable, so it does
+    # NOT need to wait for Nautobot to be healthy.
+    depends_on:
+      - nautobot
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+volumes:
+  nautobot-mcp-data:

@@ -40,6 +40,12 @@ COPY . /app
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked
 
+# Bake the embedding model into the image. The server loads it with
+# local_files_only=True (no runtime downloads), and backend/models is excluded from the
+# build context by .dockerignore, so without this step a container cannot start indexing.
+ARG EMBEDDING_MODEL=all-MiniLM-L6-v2
+RUN EMBEDDING_MODEL="${EMBEDDING_MODEL}" /app/.venv/bin/python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['EMBEDDING_MODEL'], cache_folder='/app/backend/models')"
+
 # Production stage
 FROM python:3.11-slim
 
@@ -60,9 +66,12 @@ COPY --from=builder --chown=mcpuser:mcpuser /app/.venv /app/.venv
 # Copy application code
 COPY --chown=mcpuser:mcpuser . .
 
-# Create directories for ChromaDB data persistence
-RUN mkdir -p /app/backend/chroma_db /app/backend/models \
-    && chown -R mcpuser:mcpuser /app/backend
+# Embedding model baked in by the builder stage
+COPY --from=builder --chown=mcpuser:mcpuser /app/backend/models /app/backend/models
+
+# Persistent data (ChromaDB indexes + cloned KB repos). Mount a volume here.
+RUN mkdir -p /data/chroma /data/repos \
+    && chown -R mcpuser:mcpuser /data /app/backend
 
 # Set environment variables
 ENV PATH="/app/.venv/bin:$PATH" \
@@ -72,18 +81,27 @@ ENV PATH="/app/.venv/bin:$PATH" \
     UV_NO_DEV=1 \
     # ChromaDB configuration
     TOKENIZERS_PARALLELISM=false \
-    # MCP configuration (can be overridden at runtime)
-    MCP_TRANSPORT=stdio \
-    MCP_PORT=8081
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    NAUTOBOT_MCP_DATA_DIR=/data/chroma \
+    NAUTOBOT_MCP_REPO_CACHE=/data/repos \
+    # MCP configuration (can be overridden at runtime). HTTP is the sensible default
+    # for a container; set MCP_TRANSPORT=stdio for `docker run -i` usage.
+    MCP_TRANSPORT=http \
+    MCP_HOST=0.0.0.0 \
+    MCP_PORT=8000
 
 # Switch to non-root user
 USER mcpuser
 
 # Expose HTTP port (only used in HTTP mode)
-EXPOSE 8081
+EXPOSE 8000
 
-# Default entrypoint
+# Liveness only: /health answers as soon as the server is up, while indexes are still
+# being built in the background. Use /ready (503 until indexed) for readiness gating.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
+    CMD python -c "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/health' % os.environ.get('MCP_PORT','8000'), timeout=4)" || exit 1
+
+# Default entrypoint. No default CMD: transport/host/port come from MCP_* env vars
+# (an explicit `--mode` in CMD would silently override MCP_TRANSPORT).
 ENTRYPOINT ["python", "main.py"]
-
-# Default command (can be overridden)
-CMD ["--mode", "stdio"]

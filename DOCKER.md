@@ -1,5 +1,9 @@
 # Docker Quick Start Guide
 
+> **Running next to Nautobot?** See [Sidecar deployment](#sidecar-deployment-next-to-nautobot)
+> and [Startup behavior](#startup-behavior-non-blocking) first. The compose file now runs
+> the server in **HTTP mode** by default (`MCP_TRANSPORT=http`).
+
 This guide will help you get the Nautobot MCP server running with Docker in minutes.
 
 ## Prerequisites
@@ -188,43 +192,71 @@ docker compose up -d
 
 ### Transport Modes
 
-**stdio mode** - For MCP clients (Claude Desktop, VS Code, etc.)
-```bash
-# In .env
-MCP_TRANSPORT=stdio
+The transport is chosen by `MCP_TRANSPORT` (the image no longer passes `--mode` in `CMD`,
+which used to override it silently).
 
-# Or via command line
-docker compose up -d
-```
-
-**HTTP mode** - For web-based integrations
+**HTTP mode** (container default) - streamable-http MCP endpoint at `/mcp/`
 ```bash
-# In .env
+# .env or compose environment
 MCP_TRANSPORT=http
-MCP_PORT=8081
-
-# Or via command line
-MCP_TRANSPORT=http MCP_PORT=8081 docker compose up -d
+MCP_HOST=0.0.0.0     # bind address inside the container
+MCP_PORT=8000
 ```
+Health endpoints: `GET /health` (liveness, always 200 once serving) and `GET /ready`
+(503 until the indexes are built).
+
+**stdio mode** - for MCP clients that spawn the container (`docker run -i`)
+```bash
+docker run -i --rm --env-file .env -e MCP_TRANSPORT=stdio nautobot-mcp:latest
+```
+
+### Startup behavior (non-blocking)
+
+The server answers the MCP `initialize` handshake immediately. Loading the embedding model,
+fetching/embedding Nautobot's Swagger schema and cloning/indexing the knowledge-base repos
+happen in the background. Until an index is built, the tools that need it return:
+
+```json
+{"status": "not_ready", "component": "endpoint_index", "message": "...", "server": {...}}
+```
+
+* If Nautobot is not reachable yet (e.g. it starts at the same time), the endpoint index
+  retries with backoff (5s, 10s, ... capped at 60s) until the schema can be fetched.
+* The schema is hashed; if it has not changed since the last run, re-embedding is skipped,
+  so a restart with a persisted volume becomes ready much sooner.
+* `nautobot_dynamic_api_request` and the repo list/add/remove tools never wait on an index.
+
+### Sidecar deployment next to Nautobot
+
+Use `docker-compose.sidecar.yml` (service + volume) alongside your Nautobot compose file:
+
+```bash
+export NAUTOBOT_MCP_TOKEN=<nautobot api token>      # required
+export NAUTOBOT_MCP_NAUTOBOT_URL=http://nautobot:8080/   # your Nautobot web service name
+docker compose -f docker-compose.yml -f /path/to/nautobot_mcp/docker-compose.sidecar.yml \
+  up -d --build nautobot-mcp
+```
+
+MCP clients on the compose network connect to `http://nautobot-mcp:8000/mcp/`. The sidecar
+publishes **no host port**: the endpoint has no authentication and can write to Nautobot
+with the configured token. To test from the host, publish it on loopback only
+(`"127.0.0.1:8000:8000"`) or put an authenticating reverse proxy in front.
 
 ### Data Persistence
 
-ChromaDB data and model cache are stored in Docker volumes:
+ChromaDB indexes and cloned knowledge-base repositories live in one volume mounted at
+`/data` (`NAUTOBOT_MCP_DATA_DIR=/data/chroma`, `NAUTOBOT_MCP_REPO_CACHE=/data/repos`). The
+embedding model is baked into the image at build time (the server loads it offline), so no
+model volume is needed.
 
 ```bash
-# List volumes
-docker volume ls | grep nautobot-mcp
-
-# Inspect a volume
-docker volume inspect nautobot-mcp-chroma
-
 # Backup a volume
-docker run --rm -v nautobot-mcp-chroma:/data -v $(pwd):/backup \
-  alpine tar czf /backup/chroma-backup.tar.gz -C /data .
+docker run --rm -v nautobot-mcp-data:/data -v $(pwd):/backup \
+  alpine tar czf /backup/mcp-data-backup.tar.gz -C /data .
 
 # Restore a volume
-docker run --rm -v nautobot-mcp-chroma:/data -v $(pwd):/backup \
-  alpine tar xzf /backup/chroma-backup.tar.gz -C /data
+docker run --rm -v nautobot-mcp-data:/data -v $(pwd):/backup \
+  alpine tar xzf /backup/mcp-data-backup.tar.gz -C /data
 ```
 
 ### Resource Limits
@@ -265,8 +297,8 @@ docker compose up -d
 ### "Port already in use" error
 
 ```bash
-# Check what's using port 8081
-lsof -i :8081  # or netstat -tulpn | grep 8081
+# Check what's using port 8000
+lsof -i :8000  # or netstat -tulpn | grep 8000
 
 # Use a different port
 MCP_PORT=9000 docker compose up -d
@@ -302,7 +334,7 @@ docker compose up -d
 docker volume ls | grep nautobot-mcp
 
 # Check volume mount
-docker compose exec nautobot-mcp ls -la /app/backend/chroma_db/
+docker compose exec nautobot-mcp ls -la /data/chroma/
 ```
 
 ## Integration with VS Code
@@ -322,7 +354,7 @@ Add this to your VS Code MCP configuration:
         "--env-file",
         "/path/to/nautobot_mcp/.env",
         "-v",
-        "nautobot-mcp-chroma:/app/backend/chroma_db",
+        "nautobot-mcp-data:/data",
         "-v",
         "nautobot-mcp-models:/app/backend/models",
         "nautobot-mcp:latest",
@@ -349,8 +381,8 @@ volumes:
 
 Run multiple instances on different ports:
 ```bash
-# Instance 1 (port 8081 - default)
-MCP_PORT=8081 docker compose -p nautobot-mcp-1 up -d
+# Instance 1 (port 8000 - default)
+MCP_PORT=8000 docker compose -p nautobot-mcp-1 up -d
 
 # Instance 2 (port 9000 - alternative)
 MCP_PORT=9000 docker compose -p nautobot-mcp-2 up -d
@@ -405,7 +437,7 @@ docker compose restart
    #!/bin/bash
    DATE=$(date +%Y%m%d_%H%M%S)
    docker run --rm \
-     -v nautobot-mcp-chroma:/data \
+     -v nautobot-mcp-data:/data \
      -v /backups:/backup \
      alpine tar czf /backup/chroma-${DATE}.tar.gz -C /data .
    ```

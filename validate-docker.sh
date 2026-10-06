@@ -125,16 +125,10 @@ fi
 # Check for existing volumes
 echo ""
 echo "8. Checking for existing volumes..."
-if docker volume ls | grep -q nautobot-mcp-chroma; then
-    print_success "ChromaDB volume exists"
+if docker volume ls | grep -q nautobot-mcp-data; then
+    print_success "Data volume exists"
 else
-    print_warning "ChromaDB volume does not exist (will be created on first run)"
-fi
-
-if docker volume ls | grep -q nautobot-mcp-models; then
-    print_success "Models volume exists"
-else
-    print_warning "Models volume does not exist (will be created on first run)"
+    print_warning "Data volume does not exist (will be created on first run)"
 fi
 
 # Check if container is already running

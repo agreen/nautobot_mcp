@@ -24,7 +24,9 @@ class NautobotCredentialMapping:
         # Here you would pull the correct credentials based on env
         if env == NautobotEnv.LOCAL:
             return {
-                "NAUTOBOT_URL": "http://localhost:8080/",
+                "NAUTOBOT_URL": os.environ.get(
+                    "NAUTOBOT_LOCAL_BASE_URL", "http://localhost:8080/"
+                ),
                 "NAUTOBOT_TOKEN": os.environ.get(
                     "NAUTOBOT_LOCAL_TOKEN", "0123456789abcdef0123456789abcdef01234567"
                 ),

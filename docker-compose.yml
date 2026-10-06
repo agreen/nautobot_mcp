@@ -1,3 +1,12 @@
+# Standalone Nautobot MCP server (HTTP / streamable-http transport).
+#
+# To run it next to an existing Nautobot stack, use docker-compose.sidecar.yml instead.
+#
+#   cp .env.example .env     # set NAUTOBOT_ENV / URL / token
+#   docker compose up -d --build
+#   curl localhost:8000/health   # liveness: up as soon as the process is serving
+#   curl localhost:8000/ready    # 503 until the endpoint + KB indexes are built
+#   MCP endpoint: http://localhost:8000/mcp/
 services:
   nautobot-mcp:
     build:
@@ -5,53 +14,30 @@ services:
       dockerfile: Dockerfile
     image: nautobot-mcp:latest
     container_name: nautobot-mcp-server
-    
-    # Environment variables - loaded from .env file
+
     env_file:
-      - .env
-    
-    # Additional environment variables for Docker
-    # Note: These values override defaults set in the Dockerfile
-    # Values from .env file are loaded first, then these can override them
+      - path: .env
+        required: false
+
     environment:
-      # Transport mode: stdio or http
-      - MCP_TRANSPORT=${MCP_TRANSPORT:-stdio}
-      - MCP_PORT=${MCP_PORT:-8000}
-      
-      # Override these if needed
+      - MCP_TRANSPORT=http
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
       - PYTHONUNBUFFERED=1
       - TOKENIZERS_PARALLELISM=false
-    
-    # Port mapping (only relevant for HTTP mode)
-    # Maps host port to container port (both use MCP_PORT for consistency)
+
+    # The MCP endpoint has no authentication and can write to Nautobot with the
+    # configured token, so publish it on loopback only.
     ports:
-      - "${MCP_PORT:-8000}:${MCP_PORT:-8000}"
-    
-    # Volume mounts for data persistence
+      - "127.0.0.1:${MCP_PORT:-8000}:8000"
+
     volumes:
-      # ChromaDB data persistence
-      - chroma-data:/app/backend/chroma_db
-      # Model cache persistence (sentence transformers)
-      - model-cache:/app/backend/models
-      # Optional: Mount local config for development
-      # - ./config:/app/config:ro
-      # Optional: Mount .env file if not using env_file
-      # - ./.env:/app/.env:ro
-    
-    # Restart policy
+      # ChromaDB indexes + cloned knowledge-base repos survive restarts, so a restart
+      # re-uses the existing index instead of re-embedding / re-cloning everything.
+      - mcp-data:/data
+
     restart: unless-stopped
-    
-    # Command override examples:
-    # For stdio mode (default):
-    # command: ["--mode", "stdio"]
-    # 
-    # For HTTP mode:
-    # command: ["--mode", "http", "--port", "8000"]
-    # 
-    # Note: Command uses environment variables set above
-    # To override, specify command explicitly without variables
-    
-    # Resource limits (adjust based on your needs)
+
     deploy:
       resources:
         limits:
@@ -60,24 +46,13 @@ services:
         reservations:
           cpus: '0.5'
           memory: 1G
-    
-    # Logging configuration
+
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
 
-# Named volumes for data persistence
 volumes:
-  chroma-data:
-    driver: local
-    name: nautobot-mcp-chroma
-  model-cache:
-    driver: local
-    name: nautobot-mcp-models
-
-# Network configuration (optional)
-networks:
-  default:
-    name: nautobot-mcp-network
+  mcp-data:
+    name: nautobot-mcp-data
