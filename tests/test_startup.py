@@ -18,6 +18,15 @@ from nautobot_mcp.helpers.startup import (
     ServerState,
 )
 
+
+@pytest.fixture(autouse=True)
+def _no_ready_wait(monkeypatch):
+    """Index-backed tools normally wait up to NAUTOBOT_MCP_READY_WAIT; tests opt in."""
+    from nautobot_mcp.utils.config import config
+
+    monkeypatch.setattr(config, "READY_WAIT", 0.0)
+
+
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
 
@@ -30,9 +39,13 @@ class FakeSearcher:
         self.collection.count.return_value = count
         self.calls = 0
 
-    def initialize_collection(self, force=False):
+    def initialize_collection(self, force=False, progress_cb=None):
         self.calls += 1
+        if progress_cb:
+            progress_cb(0, 4)
         time.sleep(self._delay)
+        if progress_cb:
+            progress_cb(4, 4)
         return self._results[min(self.calls - 1, len(self._results) - 1)]
 
 
@@ -41,8 +54,12 @@ class FakeKB:
         self._delay = delay
         self._error = error
 
-    def initialize_all_repositories(self, force=False):
+    def initialize_all_repositories(self, force=False, progress_cb=None):
+        if progress_cb:
+            progress_cb(0, 2, "a/b")
         time.sleep(self._delay)
+        if progress_cb:
+            progress_cb(2, 2, "")
         if self._error:
             raise self._error
         return {}
@@ -118,8 +135,11 @@ async def test_endpoint_init_retries_until_nautobot_is_reachable(monkeypatch):
 async def test_endpoint_failed_state_reported_while_retrying(monkeypatch):
     gate = asyncio.Event()
 
-    async def blocked_sleep(_):
-        gate.set()
+    async def blocked_sleep(delay):
+        if delay < 5:  # the model-download poller etc.: behave normally
+            await _real_sleep(delay)
+            return
+        gate.set()  # the retry back-off
         await asyncio.Event().wait()  # park forever; cancelled by stop()
 
     monkeypatch.setattr("nautobot_mcp.helpers.startup.asyncio.sleep", blocked_sleep)
@@ -300,10 +320,10 @@ def test_data_dir_default_is_per_user_not_the_install_dir(tmp_path, monkeypatch)
 async def test_http_health_and_ready_endpoints():
     import httpx
 
-    from nautobot_mcp.main import build_http_app
+    from nautobot_mcp.main import build_app
 
     state = ServerState()
-    app = build_http_app(state).http_app()
+    app = build_app(state).http_app()
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
         health = await client.get("/health")
@@ -323,14 +343,15 @@ async def test_http_health_and_ready_endpoints():
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_http_tools_return_not_ready_before_index_is_built():
-    from nautobot_mcp.main import build_http_app
+    from fastmcp import Client
+
+    from nautobot_mcp.main import build_app
 
     state = ServerState()
-    app = build_http_app(state)
-    tools = await app.get_tools()
-    tool = tools["mcp_nautobot_openapi_api_request_schema"]
-    result = await tool.run({"query": "devices"})
-    # fastmcp < 2.10 returns a list of content blocks; later versions a ToolResult
+    async with Client(build_app(state)) as client:
+        result = await client.call_tool(
+            "nautobot_openapi_api_request_schema", {"query": "devices"}
+        )
     blocks = result.content if hasattr(result, "content") else result
     body = json.loads(blocks[0].text)
     assert body["status"] == "not_ready"
@@ -360,10 +381,92 @@ def test_kb_tools_removed_from_http_app_when_disabled(monkeypatch):
     from nautobot_mcp import main
 
     monkeypatch.setattr(main.config, "ENABLE_KB", False)
-    tools = aio.run(main.build_http_app(ServerState(enable_kb=False)).get_tools())
-    assert "mcp_nautobot_openapi_api_request_schema" in tools
+    tools = aio.run(main.build_app(ServerState(enable_kb=False)).get_tools())
+    assert "nautobot_openapi_api_request_schema" in tools
     assert not [name for name in tools if "kb" in name]
 
     monkeypatch.setattr(main.config, "ENABLE_KB", True)
-    tools = aio.run(main.build_http_app(ServerState()).get_tools())
-    assert "mcp_nautobot_kb_semantic_search" in tools
+    tools = aio.run(main.build_app(ServerState()).get_tools())
+    assert "nautobot_kb_semantic_search" in tools
+
+
+# --------------------------------------------------------------------------- self-report
+@pytest.mark.asyncio
+async def test_status_report_has_boot_timings_phases_and_index_size():
+    searcher = FakeSearcher(delay=0.1, count=2200)
+    state = make_state(searcher, FakeKB(delay=0.05))
+    state.mark_serving("stdio")
+    state.start()
+    await wait_for(lambda: state.snapshot()["ready"])
+
+    report = await state.status_report()
+    assert report["ready"] is True
+    boot = report["boot"]
+    assert boot["transport"] == "stdio"
+    assert boot["serving_after_seconds"] is not None
+    assert boot["all_ready_after_seconds"] >= boot["serving_after_seconds"]
+    assert boot["uptime_seconds"] >= boot["all_ready_after_seconds"] - 0.1
+    assert boot["version"]
+
+    endpoint = report["components"][ENDPOINT_INDEX]
+    assert endpoint["state"] == "ready"
+    assert endpoint["time_to_ready_seconds"] >= 0.1
+    phases = {p["phase"]: p["seconds"] for p in endpoint["phases"]}
+    assert {"loading embedding model", "indexing Swagger schema"} <= set(phases)
+    assert phases["indexing Swagger schema"] >= 0.1
+
+    assert report["index"]["endpoints_indexed"] == 2200
+    assert report["server"]["nautobot_url"]
+    assert "token" not in json.dumps(report["server"]).lower().replace(
+        "token_configured", ""
+    )  # the token itself is never reported
+    await state.stop()
+
+
+@pytest.mark.asyncio
+async def test_status_report_while_initializing_has_no_ready_time():
+    state = make_state(FakeSearcher(delay=0.5), FakeKB(delay=0.5))
+    state.mark_serving("http")
+    state.start()
+    await asyncio.sleep(0.1)
+    report = await state.status_report()
+    assert report["ready"] is False
+    assert report["boot"]["all_ready_after_seconds"] is None
+    assert "time_to_ready_seconds" not in report["components"][ENDPOINT_INDEX]
+    await state.stop()
+
+
+@pytest.mark.asyncio
+async def test_status_report_never_raises_if_index_lookup_fails():
+    searcher = FakeSearcher()
+    searcher.collection.count.side_effect = RuntimeError("chroma went away")
+    state = make_state(searcher)
+    state.start()
+    await wait_for(lambda: state.is_ready(ENDPOINT_INDEX))
+    report = await state.status_report()
+    assert "chroma went away" in report["index"]["error"]
+    await state.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_http_health_includes_boot_and_status_tool_works():
+    import httpx
+
+    from nautobot_mcp.main import build_app
+
+    state = ServerState()
+    state.mark_serving("http")
+    app = build_app(state)
+
+    tools = await app.get_tools()
+    result = await tools["nautobot_server_status"].run({})
+    blocks = result.content if hasattr(result, "content") else result
+    body = json.loads(blocks[0].text)
+    assert body["boot"]["transport"] == "http"
+    assert "components" in body
+
+    transport = httpx.ASGITransport(app=app.http_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        health = (await client.get("/health")).json()
+    assert health["boot"]["serving_after_seconds"] is not None

@@ -51,6 +51,7 @@ nav:
   - User Guide:
       - Architecture: architecture.md
       - MCP Tools: tools.md
+      - Observability: observability.md
       - Knowledge Base: knowledge-base.md
       - Examples: examples.md
   - Advanced:

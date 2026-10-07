@@ -667,12 +667,12 @@ class TestInitializeCollectionRobustness:
 
     def test_upserts_in_batches(self, searcher):
         with patch("nautobot_mcp.helpers.endpoint_searcher_chroma.requests.get") as get:
-            get.return_value = self._response(self._schema(1201))
+            get.return_value = self._response(self._schema(251))
             assert searcher.initialize_collection() is True
         sizes = [
             len(c.kwargs["ids"]) for c in searcher.collection.upsert.call_args_list
         ]
-        assert sizes == [500, 500, 201]
+        assert sizes == [100, 100, 51]
 
     def test_uses_configured_schema_timeout(self, searcher):
         with patch("nautobot_mcp.helpers.endpoint_searcher_chroma.requests.get") as get:

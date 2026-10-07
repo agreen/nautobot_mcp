@@ -1,11 +1,13 @@
 """Unified entrypoint for Nautobot MCP Server.
 
 Supports stdio and HTTP (streamable-http) transports, selected via CLI args or env vars.
+One FastMCP application serves both, so tools, resources and prompts are identical.
 
 Startup is deliberately non-blocking: the transport starts serving (and answers the MCP
 ``initialize`` handshake) immediately, while the embedding model, Swagger index and
-knowledge-base index are built in the background (see ``helpers/startup.py``). Tools that
-need an index return a structured ``not_ready`` status until it is available.
+knowledge-base index are built in the background (see ``helpers/startup.py``). Progress is
+reported to clients as MCP log notifications, and index-backed tools wait briefly (reporting
+MCP progress) before answering ``not_ready``.
 
 Usage:
     # stdio mode (default)
@@ -24,11 +26,30 @@ import json
 import logging
 import os
 import sys
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Optional
 
 import urllib3
+from pydantic import Field
 
-from nautobot_mcp.helpers.startup import ENDPOINT_INDEX, KB_INDEX, ServerState
+from nautobot_mcp.helpers.startup import (
+    ENDPOINT_INDEX,
+    KB_INDEX,
+    ComponentState,
+    ServerState,
+)
+from nautobot_mcp.helpers.tool_definitions import (
+    get_add_repo_description,
+    get_api_request_schema_description,
+    get_dynamic_api_request_description,
+    get_init_repos_description,
+    get_kb_semantic_search_description,
+    get_list_repos_description,
+    get_refresh_endpoint_index_description,
+    get_remove_repo_description,
+    get_repo_status_description,
+    get_server_status_description,
+    get_update_repos_description,
+)
 from nautobot_mcp.helpers.tool_handlers import (
     handle_add_repo,
     handle_api_request_schema,
@@ -65,370 +86,351 @@ logger = logging.getLogger("nautobot_mcp")
 os.environ["POSTHOG_API_KEY"] = config.POSTHOG_API_KEY
 
 
-async def run_stdio_mode():
-    """Run the MCP server in stdio transport mode."""
-    import mcp.server.stdio
-    import mcp.types as types
-    from mcp.server import NotificationOptions, Server
-    from mcp.server.models import InitializationOptions
-
-    from nautobot_mcp.helpers.tool_definitions import (
-        get_add_repo_description,
-        get_add_repo_input_schema,
-        get_api_request_schema_description,
-        get_api_request_schema_input_schema,
-        get_dynamic_api_request_description,
-        get_dynamic_api_request_input_schema,
-        get_init_repos_description,
-        get_init_repos_input_schema,
-        get_kb_semantic_search_description,
-        get_kb_semantic_search_input_schema,
-        get_list_repos_description,
-        get_list_repos_input_schema,
-        get_refresh_endpoint_index_description,
-        get_refresh_endpoint_index_input_schema,
-        get_remove_repo_description,
-        get_remove_repo_input_schema,
-        get_repo_status_description,
-        get_repo_status_input_schema,
-        get_update_repos_description,
-        get_update_repos_input_schema,
+def _instructions(kb_enabled: bool) -> str:
+    """Server instructions, returned to every client in the ``initialize`` result."""
+    text = (
+        "Nautobot MCP server. To work with Nautobot data: first search the API schema with "
+        f"`{config.API_PREFIX}_api_request_schema` to find the right endpoint and parameters, "
+        "then call `nautobot_dynamic_api_request` (GET/POST/PUT/PATCH/DELETE)."
     )
-    from nautobot_mcp.helpers.tool_handlers import (
-        handle_add_repo,
-        handle_api_request_schema,
-        handle_dynamic_api_request,
-        handle_init_repos,
-        handle_kb_semantic_search,
-        handle_list_repos,
-        handle_refresh_endpoint_index,
-        handle_remove_repo,
-        handle_repo_status,
-        handle_update_repos,
+    if kb_enabled:
+        text += (
+            " `nautobot_kb_semantic_search` searches Nautobot's GitHub repositories for "
+            "code examples and documentation."
+        )
+    text += (
+        " Search indexes are built in the background after startup (the first run downloads "
+        "an embedding model and can take a few minutes). Index-backed tools wait briefly "
+        'while reporting progress, then return {"status": "not_ready"}. Call '
+        "`nautobot_server_status` (or read the nautobot://server/status resource) to see "
+        "what the server is doing; startup progress is also sent as log notifications."
     )
+    return text
 
-    logger.info("Starting MCP Server in stdio mode...")
 
-    # Heavy components are built in the background; see ServerState.
-    state = ServerState(enable_kb=config.ENABLE_KB)
+def _tool_progress(ctx: Any, loop: asyncio.AbstractEventLoop, label: str):
+    """Build a thread-safe ``callback(done, total, name="")`` that reports MCP progress."""
 
-    server = Server(config.API_PREFIX)
-
-    global_tool_prompt = config.GLOBAL_TOOL_PROMPT
-    if global_tool_prompt and not global_tool_prompt.endswith(" "):
-        global_tool_prompt += " "
-
-    stdio_index_requirements = {
-        f"{config.API_PREFIX}_api_request_schema": ENDPOINT_INDEX,
-        "refresh_endpoint_index": ENDPOINT_INDEX,
-        "nautobot_kb_semantic_search": KB_INDEX,
-        "nautobot_kb_update_repos": KB_INDEX,
-        "nautobot_kb_init_repos": KB_INDEX,
-        "nautobot_kb_repo_status": KB_INDEX,
-    }
-
-    @server.list_tools()
-    async def handle_list_tools() -> list[types.Tool]:
-        tools = [
-            # ---------------------------------------
-            # ---------- NB API TOOLS ---------------
-            # ---------------------------------------
-            types.Tool(
-                name=f"{config.API_PREFIX}_api_request_schema",
-                description=get_api_request_schema_description(global_tool_prompt),
-                inputSchema=get_api_request_schema_input_schema(),
-            ),
-            types.Tool(
-                name="nautobot_dynamic_api_request",
-                description=get_dynamic_api_request_description(),
-                inputSchema=get_dynamic_api_request_input_schema(),
-            ),
-            types.Tool(
-                name="refresh_endpoint_index",
-                description=get_refresh_endpoint_index_description(),
-                inputSchema=get_refresh_endpoint_index_input_schema(),
-            ),
-            # -----------------------------------
-            # ---------- KB TOOLS ---------------
-            # -----------------------------------
-            types.Tool(
-                name="nautobot_kb_semantic_search",
-                description=get_kb_semantic_search_description(),
-                inputSchema=get_kb_semantic_search_input_schema(),
-            ),
-            # -----------------------------------
-            # ------- REPO MANAGEMENT TOOLS ----
-            # -----------------------------------
-            types.Tool(
-                name="nautobot_kb_list_repos",
-                description=get_list_repos_description(),
-                inputSchema=get_list_repos_input_schema(),
-            ),
-            types.Tool(
-                name="nautobot_kb_add_repo",
-                description=get_add_repo_description(),
-                inputSchema=get_add_repo_input_schema(),
-            ),
-            types.Tool(
-                name="nautobot_kb_remove_repo",
-                description=get_remove_repo_description(),
-                inputSchema=get_remove_repo_input_schema(),
-            ),
-            types.Tool(
-                name="nautobot_kb_update_repos",
-                description=get_update_repos_description(),
-                inputSchema=get_update_repos_input_schema(),
-            ),
-            types.Tool(
-                name="nautobot_kb_init_repos",
-                description=get_init_repos_description(),
-                inputSchema=get_init_repos_input_schema(),
-            ),
-            types.Tool(
-                name="nautobot_kb_repo_status",
-                description=get_repo_status_description(),
-                inputSchema=get_repo_status_input_schema(),
-            ),
-        ]
-        if not config.ENABLE_KB:
-            tools = [t for t in tools if not t.name.startswith("nautobot_kb_")]
-        return tools
-
-    @server.call_tool()
-    async def handle_invoke_tool(
-        name: str, inputs: Dict[str, Any]
-    ) -> list[types.TextContent]:
+    async def send(done: float, total: float, message: str) -> None:
         try:
-            index_needed = stdio_index_requirements.get(name)
-            if index_needed:
-                not_ready = state.not_ready_response(index_needed)
-                if not_ready:
-                    return [types.TextContent(type="text", text=not_ready)]
+            await ctx.report_progress(progress=done, total=total, message=message)
+        except Exception:  # noqa: BLE001 - progress is best effort
+            pass
 
-            # --------------------------------------------
-            # ---------- Call NB API TOOLS ---------------
-            # --------------------------------------------
-            if name == f"{config.API_PREFIX}_api_request_schema":
-                query = inputs["query"]
-                n_results = inputs.get("n_results", config.DEFAULT_SEARCH_RESULTS)
-                response_text = await handle_api_request_schema(
-                    query, n_results, state.endpoint_searcher
-                )
-                return [types.TextContent(type="text", text=response_text)]
-
-            elif name == "refresh_endpoint_index":
-                response_text = await handle_refresh_endpoint_index(
-                    state.endpoint_searcher
-                )
-                return [types.TextContent(type="text", text=response_text)]
-
-            elif name == "nautobot_dynamic_api_request":
-                method = inputs["method"]
-                path = inputs["path"]
-                params = inputs.get("params")
-                body = inputs.get("body")
-                response_text = await handle_dynamic_api_request(
-                    method, path, params, body
-                )
-                return [types.TextContent(type="text", text=response_text)]
-
-            # ----------------------------------------
-            # ---------- CALL KB TOOLS ---------------
-            # ----------------------------------------
-            elif name == "nautobot_kb_semantic_search":
-                query = inputs["query"]
-                n_results = inputs.get("n_results", 5)
-                response_text = await handle_kb_semantic_search(
-                    query, n_results, state.nautobot_kb
-                )
-                return [types.TextContent(type="text", text=response_text)]
-
-            # ----------------------------------------
-            # -------- REPO MANAGEMENT TOOLS --------
-            # ----------------------------------------
-            elif name == "nautobot_kb_list_repos":
-                response_text = await handle_list_repos()
-                return [types.TextContent(type="text", text=response_text)]
-
-            elif name == "nautobot_kb_add_repo":
-                repo = inputs["repo"]
-                description = inputs.get("description")
-                response_text = await handle_add_repo(repo, description)
-                return [types.TextContent(type="text", text=response_text)]
-
-            elif name == "nautobot_kb_remove_repo":
-                repo = inputs["repo"]
-                response_text = await handle_remove_repo(repo)
-                return [types.TextContent(type="text", text=response_text)]
-
-            elif name == "nautobot_kb_update_repos":
-                repo = inputs.get("repo")
-                force = inputs.get("force", False)
-                response_text = await handle_update_repos(
-                    state.nautobot_kb, repo, force
-                )
-                return [types.TextContent(type="text", text=response_text)]
-
-            elif name == "nautobot_kb_init_repos":
-                force = inputs.get("force", False)
-                response_text = await handle_init_repos(state.nautobot_kb, force)
-                return [types.TextContent(type="text", text=response_text)]
-
-            elif name == "nautobot_kb_repo_status":
-                response_text = await handle_repo_status(state.nautobot_kb)
-                return [types.TextContent(type="text", text=response_text)]
-
-            else:
-                raise ValueError(f"Unknown tool: {name}")
-
-        except Exception as e:
-            logger.exception(f"Error invoking tool {name}")
-            error_text = json.dumps({"error": str(e)}, indent=2)
-            return [types.TextContent(type="text", text=error_text)]
-
-    async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
-        logger.info("Server running with stdio transport")
-        # Kick off index building only now; the handshake below is served immediately.
-        state.start()
-        await server.run(
-            read_stream,
-            write_stream,
-            InitializationOptions(
-                server_name=config.SERVER_NAME,
-                server_version=config.SERVER_VERSION,
-                capabilities=server.get_capabilities(
-                    notification_options=NotificationOptions(),
-                    experimental_capabilities={},
-                ),
-            ),
+    def callback(done: float, total: float, name: str = "") -> None:
+        message = f"{label}: {name + ' ' if name else ''}{int(done)}/{int(total)}"
+        loop.call_soon_threadsafe(
+            lambda: asyncio.ensure_future(send(done, total, message))
         )
 
+    return callback
 
-def build_http_app(state: ServerState):
+
+def build_app(state: ServerState):
     """Create the FastMCP app. Tools read components from ``state`` at call time."""
-    from fastmcp import FastMCP
+    from fastmcp import Context, FastMCP
+    from fastmcp.server.middleware import Middleware
     from starlette.requests import Request
     from starlette.responses import JSONResponse
 
-    mcp_app = FastMCP(config.SERVER_NAME)
+    kb_enabled = state.status[KB_INDEX].state is not ComponentState.DISABLED
 
+    class SessionRegistrar(Middleware):
+        """Remember each client session so startup events can be pushed to it."""
+
+        async def on_message(self, context, call_next):
+            fastmcp_ctx = getattr(context, "fastmcp_context", None)
+            if fastmcp_ctx is not None:
+                try:
+                    state.register_session(fastmcp_ctx.session)
+                except Exception:  # noqa: BLE001 - never break a request over logging
+                    pass
+            return await call_next(context)
+
+    app = FastMCP(
+        config.SERVER_NAME,
+        instructions=_instructions(kb_enabled),
+        middleware=[SessionRegistrar()],
+    )
+
+    # Honor `logging/setLevel` from clients (also advertises the `logging` capability).
+    try:
+
+        @app._mcp_server.set_logging_level()
+        async def _set_logging_level(level: str) -> None:
+            state.set_log_level(level)
+
+    except Exception:  # noqa: BLE001 - internal API; degrade to the default level
+        logger.debug("Could not register logging/setLevel handler", exc_info=True)
+
+    # ------------------------------------------------------------------ HTTP-only routes
     # Liveness: always 200 once the process is serving (use for container healthchecks).
-    @mcp_app.custom_route("/health", methods=["GET"])
+    @app.custom_route("/health", methods=["GET"])
     async def health_check(request: Request) -> JSONResponse:
         return JSONResponse(
-            {"status": "healthy", "service": config.SERVER_NAME, **state.snapshot()}
+            {
+                "status": "healthy",
+                "service": config.SERVER_NAME,
+                **state.snapshot(),
+                "boot": state.boot_info(),
+            }
         )
 
     # Readiness: 503 until the indexes are built.
-    @mcp_app.custom_route("/ready", methods=["GET"])
+    @app.custom_route("/ready", methods=["GET"])
     async def ready_check(request: Request) -> JSONResponse:
         snapshot = state.snapshot()
         return JSONResponse(snapshot, status_code=200 if snapshot["ready"] else 503)
 
-    # API Tools
-    @mcp_app.tool()
-    async def mcp_nautobot_openapi_api_request_schema(
-        query: str, n_results: int = 5
-    ) -> str:
-        """Search for Nautobot API endpoints using natural language. Returns endpoint paths, methods, parameters, and response formats. Use this before making API requests to find the correct endpoint."""
-        return state.not_ready_response(
-            ENDPOINT_INDEX
-        ) or await handle_api_request_schema(query, n_results, state.endpoint_searcher)
+    # ------------------------------------------------------------------ API tools
+    global_tool_prompt = config.GLOBAL_TOOL_PROMPT
+    if global_tool_prompt and not global_tool_prompt.endswith(" "):
+        global_tool_prompt += " "
 
-    @mcp_app.tool()
-    async def mcp_nautobot_dynamic_api_request(
-        method: str,
-        path: str,
-        params: Optional[dict] = None,
-        body: Optional[dict] = None,
+    @app.tool(
+        name=f"{config.API_PREFIX}_api_request_schema",
+        description=get_api_request_schema_description(global_tool_prompt),
+    )
+    async def api_request_schema(
+        query: Annotated[
+            str, Field(description="Natural language description of the API operation")
+        ],
+        n_results: Annotated[
+            int, Field(description="Number of matching endpoints to return")
+        ] = config.DEFAULT_SEARCH_RESULTS,
+        ctx: Context | None = None,
     ) -> str:
-        """Execute HTTP requests to Nautobot API for CRUD operations. Use GET to retrieve data, POST to create, PUT/PATCH to update, DELETE to remove. Query the API schema tool first to find correct endpoints and parameters. GET/DELETE use 'params', POST/PUT/PATCH use 'body'."""
+        return await state.ensure_ready(ENDPOINT_INDEX, ctx) or (
+            await handle_api_request_schema(query, n_results, state.endpoint_searcher)
+        )
+
+    @app.tool(
+        name="nautobot_dynamic_api_request",
+        description=get_dynamic_api_request_description(),
+    )
+    async def dynamic_api_request(
+        method: Annotated[
+            str, Field(description="HTTP method: GET, POST, PUT, PATCH, DELETE")
+        ],
+        path: Annotated[str, Field(description="API path, e.g. /dcim/devices/")],
+        params: Annotated[
+            Optional[dict], Field(description="Query parameters (GET/DELETE)")
+        ] = None,
+        body: Annotated[
+            Optional[dict], Field(description="JSON body (POST/PUT/PATCH)")
+        ] = None,
+    ) -> str:
         return await handle_dynamic_api_request(method, path, params, body)
 
-    @mcp_app.tool()
-    async def mcp_refresh_endpoint_index() -> str:
-        """Manually refresh the OpenAPI endpoint index from the latest Nautobot schema."""
-        return state.not_ready_response(
-            ENDPOINT_INDEX
-        ) or await handle_refresh_endpoint_index(state.endpoint_searcher)
-
-    # Knowledge Base Tools
-    @mcp_app.tool()
-    async def mcp_nautobot_kb_semantic_search(query: str, n_results: int = 5) -> str:
-        """Search Nautobot GitHub repositories for code examples, best practices, and documentation. Use for: Jobs/Apps/Plugin examples, implementation patterns, API usage, feature guidance. Returns code snippets and docs with source attribution. Results truncated to 300 chars."""
-        return state.not_ready_response(KB_INDEX) or await handle_kb_semantic_search(
-            query, n_results, state.nautobot_kb
+    @app.tool(
+        name="refresh_endpoint_index",
+        description=get_refresh_endpoint_index_description(),
+    )
+    async def refresh_endpoint_index(ctx: Context | None = None) -> str:
+        if not_ready := await state.ensure_ready(ENDPOINT_INDEX, ctx):
+            return not_ready
+        progress = (
+            _tool_progress(ctx, asyncio.get_running_loop(), "Re-embedding endpoints")
+            if ctx is not None
+            else None
         )
+        return await handle_refresh_endpoint_index(state.endpoint_searcher, progress)
 
-    # Repository Management Tools
-    @mcp_app.tool()
-    async def mcp_nautobot_kb_list_repos() -> str:
-        """List all repositories configured in the Nautobot knowledge base with their metadata."""
-        return await handle_list_repos()
+    @app.tool(
+        name="nautobot_server_status", description=get_server_status_description()
+    )
+    async def server_status() -> str:
+        return json.dumps(await state.status_report(), indent=2)
 
-    @mcp_app.tool()
-    async def mcp_nautobot_kb_add_repo(
-        repo: str, description: Optional[str] = None
+    # ------------------------------------------------------------------ KB tools
+    if kb_enabled:
+
+        @app.tool(
+            name="nautobot_kb_semantic_search",
+            description=get_kb_semantic_search_description(),
+        )
+        async def kb_semantic_search(
+            query: Annotated[str, Field(description="What to search for")],
+            n_results: Annotated[int, Field(description="Number of results")] = 5,
+            ctx: Context | None = None,
+        ) -> str:
+            return await state.ensure_ready(KB_INDEX, ctx) or (
+                await handle_kb_semantic_search(query, n_results, state.nautobot_kb)
+            )
+
+        @app.tool(
+            name="nautobot_kb_list_repos", description=get_list_repos_description()
+        )
+        async def kb_list_repos() -> str:
+            return await handle_list_repos()
+
+        @app.tool(name="nautobot_kb_add_repo", description=get_add_repo_description())
+        async def kb_add_repo(
+            repo: Annotated[str, Field(description="Repository as owner/name")],
+            description: Annotated[
+                Optional[str], Field(description="Optional description")
+            ] = None,
+        ) -> str:
+            return await handle_add_repo(repo, description)
+
+        @app.tool(
+            name="nautobot_kb_remove_repo", description=get_remove_repo_description()
+        )
+        async def kb_remove_repo(
+            repo: Annotated[str, Field(description="Repository as owner/name")],
+        ) -> str:
+            return await handle_remove_repo(repo)
+
+        @app.tool(
+            name="nautobot_kb_update_repos", description=get_update_repos_description()
+        )
+        async def kb_update_repos(
+            repo: Annotated[
+                Optional[str],
+                Field(description="Repository to update; omit to update all"),
+            ] = None,
+            force: Annotated[
+                bool, Field(description="Re-index even if unchanged")
+            ] = False,
+            ctx: Context | None = None,
+        ) -> str:
+            if not_ready := await state.ensure_ready(KB_INDEX, ctx):
+                return not_ready
+            progress = (
+                _tool_progress(ctx, asyncio.get_running_loop(), "Updating repositories")
+                if ctx is not None and repo is None
+                else None
+            )
+            return await handle_update_repos(state.nautobot_kb, repo, force, progress)
+
+        @app.tool(
+            name="nautobot_kb_init_repos", description=get_init_repos_description()
+        )
+        async def kb_init_repos(
+            force: Annotated[
+                bool, Field(description="Re-index all repositories")
+            ] = False,
+            ctx: Context | None = None,
+        ) -> str:
+            if not_ready := await state.ensure_ready(KB_INDEX, ctx):
+                return not_ready
+            progress = (
+                _tool_progress(
+                    ctx, asyncio.get_running_loop(), "Initializing repositories"
+                )
+                if ctx is not None
+                else None
+            )
+            return await handle_init_repos(state.nautobot_kb, force, progress)
+
+        @app.tool(
+            name="nautobot_kb_repo_status", description=get_repo_status_description()
+        )
+        async def kb_repo_status(ctx: Context | None = None) -> str:
+            return await state.ensure_ready(KB_INDEX, ctx) or (
+                await handle_repo_status(state.nautobot_kb)
+            )
+
+    # ------------------------------------------------------------------ resources
+    # Read-only context a client (or user) can attach without invoking a tool.
+    @app.resource(
+        "nautobot://server/status",
+        name="server_status",
+        description="Live health of this MCP server: boot and warm-up timings, per-phase "
+        "durations, index readiness and sizes.",
+        mime_type="application/json",
+    )
+    async def server_status_resource() -> str:
+        return json.dumps(await state.status_report(), indent=2)
+
+    @app.resource(
+        "nautobot://server/startup-log",
+        name="startup_log",
+        description="Chronological log of what the server did while starting up and "
+        "building its indexes (model download, indexing progress, failures).",
+        mime_type="application/json",
+    )
+    async def startup_log_resource() -> str:
+        return json.dumps(state.startup_log(), indent=2)
+
+    if kb_enabled:
+
+        @app.resource(
+            "nautobot://kb/repositories",
+            name="kb_repositories",
+            description="GitHub repositories configured for the Nautobot knowledge base.",
+            mime_type="application/json",
+        )
+        async def kb_repositories_resource() -> str:
+            return await handle_list_repos()
+
+    # ------------------------------------------------------------------ prompts
+    # User-invoked workflow templates (shown as slash commands in many clients).
+    @app.prompt(
+        name="query_nautobot",
+        description="Answer a question or make a change in Nautobot using the API tools.",
+    )
+    def query_nautobot(
+        task: Annotated[str, Field(description="What you want to know or change")],
     ) -> str:
-        """Add a new GitHub repository to the Nautobot knowledge base for indexing and search."""
-        return await handle_add_repo(repo, description)
-
-    @mcp_app.tool()
-    async def mcp_nautobot_kb_remove_repo(repo: str) -> str:
-        """Remove a repository from the Nautobot knowledge base configuration."""
-        return await handle_remove_repo(repo)
-
-    @mcp_app.tool()
-    async def mcp_nautobot_kb_update_repos(
-        repo: Optional[str] = None, force: bool = False
-    ) -> str:
-        """Update repository indexes in the knowledge base. Specify a repo to update one, or omit to update all. Use force=true to reindex even if unchanged."""
-        return state.not_ready_response(KB_INDEX) or await handle_update_repos(
-            state.nautobot_kb, repo, force
+        return (
+            f"Task: {task}\n\n"
+            f"1. Use `{config.API_PREFIX}_api_request_schema` to find the endpoint(s) and "
+            "parameters for this task. Do not guess paths.\n"
+            "2. Use `nautobot_dynamic_api_request` to call them. Prefer GET first to inspect "
+            "current state, and use filters and `limit` to keep responses small.\n"
+            "3. For any POST/PUT/PATCH/DELETE, state exactly what you are about to change and "
+            "confirm with me before sending it.\n"
+            "4. Summarize the result and note anything surprising."
         )
 
-    @mcp_app.tool()
-    async def mcp_nautobot_kb_init_repos(force: bool = False) -> str:
-        """Initialize all repositories in the knowledge base. Use force=true to reindex all repos."""
-        return state.not_ready_response(KB_INDEX) or await handle_init_repos(
-            state.nautobot_kb, force
+    @app.prompt(
+        name="diagnose_nautobot_mcp",
+        description="Check why Nautobot MCP tools are slow, not ready, or failing.",
+    )
+    def diagnose_nautobot_mcp() -> str:
+        return (
+            "Call `nautobot_server_status` and explain the result in plain language: is each "
+            "index ready, how long did startup and warm-up take, what failed or is still in "
+            "progress, and what (if anything) should I do about it? Also check that the "
+            "Nautobot URL looks right and that a token is configured."
         )
 
-    @mcp_app.tool()
-    async def mcp_nautobot_kb_repo_status() -> str:
-        """Show repository status including document counts, indexing status, and configuration."""
-        return state.not_ready_response(KB_INDEX) or await handle_repo_status(
-            state.nautobot_kb
+    if kb_enabled:
+
+        @app.prompt(
+            name="nautobot_job_example",
+            description="Find examples and write a Nautobot Job for a goal.",
         )
+        def nautobot_job_example(
+            goal: Annotated[str, Field(description="What the Job should do")],
+        ) -> str:
+            return (
+                f"I want a Nautobot Job that does the following: {goal}\n\n"
+                "Use `nautobot_kb_semantic_search` to find existing Job examples and the "
+                "relevant Nautobot APIs, then write the Job. Cite which repository/file each "
+                "pattern came from, and list any assumptions you made."
+            )
 
-    if not config.ENABLE_KB:
-        for tool_name in (
-            "mcp_nautobot_kb_semantic_search",
-            "mcp_nautobot_kb_list_repos",
-            "mcp_nautobot_kb_add_repo",
-            "mcp_nautobot_kb_remove_repo",
-            "mcp_nautobot_kb_update_repos",
-            "mcp_nautobot_kb_init_repos",
-            "mcp_nautobot_kb_repo_status",
-        ):
-            mcp_app.remove_tool(tool_name)
-
-    return mcp_app
+    return app
 
 
 async def serve_http(
-    mcp_app, state: ServerState, host: str = "127.0.0.1", port: int = 8000
+    app, state: ServerState, host: str = "127.0.0.1", port: int = 8000
 ) -> None:
-    """Serve ``mcp_app`` over streamable-http, building indexes in the background."""
+    """Serve ``app`` over streamable-http, building indexes in the background."""
+    state.mark_serving("http")
     state.start()  # returns immediately; the server below starts accepting requests now
     try:
-        await mcp_app.run_async(transport="streamable-http", host=host, port=port)
+        await app.run_async(
+            transport="streamable-http", host=host, port=port, show_banner=False
+        )
     finally:
         await state.stop()
 
 
 async def run_http_mode(port: int = 8000, host: str = "127.0.0.1"):
-    """Run the MCP server in HTTP transport mode using FastMCP.
+    """Run the MCP server in HTTP transport mode.
 
     Args:
         port: Port number to listen on (default: 8000)
@@ -436,7 +438,20 @@ async def run_http_mode(port: int = 8000, host: str = "127.0.0.1"):
     """
     logger.info(f"Starting MCP Server in HTTP mode on {host}:{port}...")
     state = ServerState(enable_kb=config.ENABLE_KB)
-    await serve_http(build_http_app(state), state, host=host, port=port)
+    await serve_http(build_app(state), state, host=host, port=port)
+
+
+async def run_stdio_mode():
+    """Run the MCP server in stdio transport mode."""
+    logger.info("Starting MCP Server in stdio mode...")
+    state = ServerState(enable_kb=config.ENABLE_KB)
+    app = build_app(state)
+    state.mark_serving("stdio")
+    state.start()  # background index building; the handshake is served immediately
+    try:
+        await app.run_async(transport="stdio", show_banner=False)
+    finally:
+        await state.stop()
 
 
 def parse_arguments() -> argparse.Namespace:

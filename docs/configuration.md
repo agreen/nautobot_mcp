@@ -25,6 +25,7 @@ Run `nautobot-mcp --check` to verify the URL, schema and token.
 |---|---|---|
 | `NAUTOBOT_MCP_ENABLE_KB` | `true` | Knowledge-base tools (semantic search over Nautobot GitHub repos). Clones and indexes several large repositories; set `false` for API-only use. The `nautobot_kb_*` tools are then not offered at all. |
 | `GITHUB_TOKEN` | *(empty)* | Raises GitHub rate limits for the knowledge base. |
+| `NAUTOBOT_MCP_READY_WAIT` | `20` | Seconds an index-backed tool waits for a still-warming index (reporting MCP progress) before returning `not_ready`. `0` = never wait. |
 | `DEFAULT_SEARCH_RESULTS` | `5` | Default number of results for API schema search. |
 | `API_PREFIX` | `nautobot_openapi` | Prefix of the schema-search tool name (`<prefix>_api_request_schema`). |
 

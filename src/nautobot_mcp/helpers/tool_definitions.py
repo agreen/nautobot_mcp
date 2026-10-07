@@ -50,6 +50,15 @@ def get_refresh_endpoint_index_description() -> str:
     )
 
 
+def get_server_status_description() -> str:
+    """Get description for the server status tool."""
+    return (
+        "Report this MCP server's own health: version, uptime, how long startup and index "
+        "warm-up took (per phase), whether each index is ready, and index sizes. "
+        "Use it to find out why search tools say 'not_ready' or to check the server is healthy."
+    )
+
+
 def get_kb_semantic_search_description() -> str:
     """Get description for knowledge base semantic search tool."""
     return (
@@ -161,6 +170,11 @@ def get_dynamic_api_request_input_schema() -> Dict[str, Any]:
 
 def get_refresh_endpoint_index_input_schema() -> Dict[str, Any]:
     """Get input schema for refresh endpoint index tool."""
+    return {"type": "object", "properties": {}, "required": []}
+
+
+def get_server_status_input_schema() -> Dict[str, Any]:
+    """Get input schema for the server status tool."""
     return {"type": "object", "properties": {}, "required": []}
 
 

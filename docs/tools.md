@@ -147,6 +147,12 @@ Execute HTTP requests against any Nautobot API endpoint.
 
 ---
 
+### `nautobot_server_status`
+
+Report the server's own health: version, uptime, how long startup and index warm-up took (per phase),
+whether each index is ready, index sizes and the most recent startup events. Takes no parameters and
+works before the indexes are ready. See [Observability](observability.md).
+
 ### `refresh_endpoint_index`
 
 Manually refresh the OpenAPI endpoint index from Nautobot.

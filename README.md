@@ -76,6 +76,9 @@ Notes:
   tools return `{"status": "not_ready", ...}` until they are built (first run: model download + indexing, a minute or
   two; later runs: seconds). `nautobot_dynamic_api_request` never waits.
 - `nautobot-mcp --check` verifies the URL, schema and token and exits.
+- Startup progress is reported to clients as MCP log notifications and tool-call progress, and the server
+  describes itself via the `nautobot_server_status` tool and `nautobot://server/status` resource. See
+  [Observability](docs/observability.md).
 - State (indexes, model, cloned repos) is kept in `~/.local/share/nautobot-mcp`; set `NAUTOBOT_MCP_DATA_DIR` to move it.
 
 ### Option 2: Docker / sidecar next to Nautobot
@@ -108,6 +111,7 @@ Everything is a plain environment variable (a `.env` file in the working directo
 | `GITHUB_TOKEN` | *(empty)* | Higher GitHub rate limits for the knowledge base |
 | `NAUTOBOT_MCP_DATA_DIR` | `~/.local/share/nautobot-mcp` | Indexes, cloned repos, embedding model, user-added repos |
 | `MCP_TRANSPORT` / `MCP_HOST` / `MCP_PORT` | `stdio` / `127.0.0.1` / `8000` | Transport settings (CLI flags `--mode/--host/--port` win) |
+| `NAUTOBOT_MCP_READY_WAIT` | `20` | Seconds an index-backed tool call waits (reporting progress) for a still-warming index before answering `not_ready`; `0` disables waiting |
 | `API_TIMEOUT` | `10` | Seconds per Nautobot API call |
 | `SCHEMA_TIMEOUT` | `120` | Seconds to fetch the Swagger schema |
 | `DEFAULT_SEARCH_RESULTS` | `5` | Default result count for schema search |
@@ -355,6 +359,7 @@ uv run python -c "import nautobot_mcp.main; print('Server imports OK')"
 - **`nautobot_openapi_api_request_schema`**: Search for API endpoints by intent
 - **`nautobot_dynamic_api_request`**: Execute API requests with any HTTP method
 - **`refresh_endpoint_index`**: Manually refresh the endpoint search index
+- **`nautobot_server_status`**: The server's own health: boot and warm-up timings, per-phase durations, index readiness and sizes
 
 ### Knowledge Base Tools
 - **`nautobot_kb_semantic_search`**: Semantic search over Nautobot knowledge base repositories

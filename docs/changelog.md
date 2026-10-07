@@ -23,6 +23,25 @@ All notable changes to the Nautobot MCP Server will be documented in this file.
   directory is never written to. User-added repositories moved to `<data dir>/user_repositories.json`
 - Dependency upper bounds (`mcp<2`, `fastmcp<3`, `chromadb<2`) because `uvx` ignores `uv.lock`
 
+### Observability and resilience (0.3.0)
+- Startup progress is reported to clients as MCP log notifications (replayed to late joiners, honoring
+  `logging/setLevel`), and index-backed tool calls now wait briefly while reporting MCP progress
+  (`NAUTOBOT_MCP_READY_WAIT`, default 20 s) instead of failing immediately
+- New `nautobot_server_status` tool and `nautobot://server/status` / `nautobot://server/startup-log`
+  resources with boot and per-phase warm-up timings; HTTP `/health` includes boot timings
+- Server `instructions` in the `initialize` result; prompts `query_nautobot`, `diagnose_nautobot_mcp`,
+  `nautobot_job_example`; resource `nautobot://kb/repositories`
+- One FastMCP application now serves stdio and HTTP, so **tool names are the same on both**; the HTTP
+  transport lost its `mcp_` prefix (`nautobot_openapi_api_request_schema`, `nautobot_kb_*`, ...). Requires
+  `fastmcp>=2.12`
+- The search indexes self-heal: ChromaDB failures (e.g. "hnsw segment writer") trigger an automatic
+  index rebuild and retry rather than a permanent failure; the endpoint index retries with backoff while
+  Nautobot is unreachable
+- Several server processes sharing one data directory no longer corrupt each other: the first owns the
+  shared indexes, the rest use private directories (cleaned up on exit)
+- Python 3.13 supported
+- Indexing reports progress every 100 endpoints
+
 ### Removed
 - `server.py` / `server_http.py` (use `nautobot-mcp [--mode http]`), the unused `nb_kb_v1.py` and
   `cache_embedding.py`, the committed `backend/models` directory

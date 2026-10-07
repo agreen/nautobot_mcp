@@ -1,35 +1,36 @@
 """Configuration is plain environment variables (no environment-name indirection)."""
 
-import importlib
+import importlib.util
+import sys
 
 import pytest
 
 
-@pytest.fixture(autouse=True)
-def _restore_config_module(monkeypatch):
-    """Reload the config module again after each test, once env changes are undone."""
-    yield
-    monkeypatch.undo()
-    import sys
-
-    importlib.reload(sys.modules["nautobot_mcp.utils.config"])
-
-
 def _reload_config(monkeypatch, **env):
+    """Evaluate a *separate copy* of the config module under the given environment.
+
+    (Reloading the real module would replace the shared ``config`` object that the rest of
+    the package already holds references to.)
+    """
     for key in (
         "NAUTOBOT_URL",
         "NAUTOBOT_TOKEN",
         "SSL_VERIFY",
         "NAUTOBOT_MCP_ENABLE_KB",
+        "NAUTOBOT_MCP_READY_WAIT",
     ):
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
 
-    import sys
+    import nautobot_mcp.utils.config  # noqa: F401  (ensures the real module is loaded)
 
-    module = sys.modules["nautobot_mcp.utils.config"]
-    module = importlib.reload(module)
+    real = sys.modules[
+        "nautobot_mcp.utils.config"
+    ]  # `nautobot_mcp.utils.config` attr is the instance
+    spec = importlib.util.spec_from_file_location("_config_under_test", real.__file__)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
     return module.config
 
 
@@ -73,3 +74,9 @@ def test_boolean_flags(monkeypatch, value, expected):
     cfg = _reload_config(monkeypatch, SSL_VERIFY=value, NAUTOBOT_MCP_ENABLE_KB=value)
     assert cfg.SSL_VERIFY is expected
     assert cfg.ENABLE_KB is expected
+
+
+@pytest.mark.unit
+def test_ready_wait_setting(monkeypatch):
+    assert _reload_config(monkeypatch).READY_WAIT == 20.0
+    assert _reload_config(monkeypatch, NAUTOBOT_MCP_READY_WAIT="0").READY_WAIT == 0.0

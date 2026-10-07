@@ -33,6 +33,10 @@ class Config:
     GLOBAL_TOOL_PROMPT: str = NAUTOBOT_URL + "/api/swagger.json"
     SSL_VERIFY: bool = _env_bool("SSL_VERIFY", True)
 
+    # How long an index-backed tool call waits for a still-warming index (reporting MCP
+    # progress) before answering "not_ready". 0 = never wait.
+    READY_WAIT: float = float(os.getenv("NAUTOBOT_MCP_READY_WAIT", "20"))
+
     # Request timeouts (seconds)
     API_TIMEOUT: int = int(os.getenv("API_TIMEOUT", "10"))
     # Fetching the full Swagger schema can be slow on a large Nautobot instance

@@ -137,7 +137,7 @@ async def handle_dynamic_api_request(
 
 
 async def handle_refresh_endpoint_index(
-    endpoint_searcher: "EndpointSearcherChroma",
+    endpoint_searcher: "EndpointSearcherChroma", progress_cb=None
 ) -> str:
     """
     Handle endpoint index refresh requests.
@@ -149,7 +149,9 @@ async def handle_refresh_endpoint_index(
         Success message string
     """
     logger.info("Manual endpoint index refresh triggered.")
-    ok = await asyncio.to_thread(endpoint_searcher.initialize_collection, True)
+    ok = await asyncio.to_thread(
+        endpoint_searcher.initialize_collection, True, progress_cb
+    )
     if not ok:
         return "Endpoint index refresh failed; see server logs. Existing index left unchanged."
     return "Endpoint index refreshed successfully."
@@ -311,6 +313,7 @@ async def handle_update_repos(
     nautobot_kb: "EnhancedNautobotKnowledge",
     repo: Optional[str] = None,
     force: bool = False,
+    progress_cb=None,
 ) -> str:
     """
     Handle repository update requests.
@@ -349,7 +352,7 @@ async def handle_update_repos(
                     }
         else:
             results = await asyncio.to_thread(
-                nautobot_kb.initialize_all_repositories, force
+                nautobot_kb.initialize_all_repositories, force, progress_cb
             )
             updated_count = sum(results.values())
             response = {
@@ -370,7 +373,7 @@ async def handle_update_repos(
 
 
 async def handle_init_repos(
-    nautobot_kb: "EnhancedNautobotKnowledge", force: bool = False
+    nautobot_kb: "EnhancedNautobotKnowledge", force: bool = False, progress_cb=None
 ) -> str:
     """
     Handle repository initialization requests.
@@ -384,7 +387,7 @@ async def handle_init_repos(
     """
     try:
         results = await asyncio.to_thread(
-            nautobot_kb.initialize_all_repositories, force
+            nautobot_kb.initialize_all_repositories, force, progress_cb
         )
         updated_count = sum(results.values())
 

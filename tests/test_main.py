@@ -121,7 +121,7 @@ def test_imports():
 
     assert hasattr(main, "main")
     assert hasattr(main, "parse_arguments")
-    assert hasattr(main, "build_http_app")
+    assert hasattr(main, "build_app")
     assert hasattr(main, "serve_http")
     assert hasattr(main, "run_stdio_mode")
     assert hasattr(main, "run_http_mode")

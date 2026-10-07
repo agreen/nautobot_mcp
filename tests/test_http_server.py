@@ -48,7 +48,7 @@ async def test_mcp_server():
         print("\n🔍 Testing API schema search...")
         try:
             payload = {
-                "name": "mcp_nautobot_openapi_api_request_schema",
+                "name": "nautobot_openapi_api_request_schema",
                 "arguments": {"query": "get devices", "n_results": 3},
             }
             response = await client.post(f"{base_url}/tools/call", json=payload)
@@ -73,7 +73,7 @@ async def test_mcp_server():
         print("\n📚 Testing knowledge base search...")
         try:
             payload = {
-                "name": "mcp_nautobot_kb_semantic_search",
+                "name": "nautobot_kb_semantic_search",
                 "arguments": {"query": "Nautobot Job example", "n_results": 2},
             }
             response = await client.post(f"{base_url}/tools/call", json=payload)

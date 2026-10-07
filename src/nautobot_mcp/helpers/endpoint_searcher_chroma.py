@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import shutil
 from pathlib import Path
 from typing import List, Optional
 
@@ -24,18 +25,41 @@ class EndpointSearcherChroma:
         self.base_url: str = config.GLOBAL_TOOL_PROMPT
         self.token: str = config.NAUTOBOT_TOKEN
         self.db_path: str = str(Path(get_chroma_db_path()) / "nautobot_api" / "db")
-
-        # Setup Chroma client
-        self.client = PersistentClient(
-            path=self.db_path, settings=Settings(anonymized_telemetry=False)
-        )
+        # Why the last initialize_collection() returned False (None if it succeeded)
+        self.last_error: Optional[Exception] = None
 
         # Local ONNX embedding model (downloaded on first use into the data dir)
         self.embedding_function = LocalEmbeddingFunction()
 
+        self._open()
+
+    def _open(self) -> None:
+        """(Re)open the persistent ChromaDB store at ``db_path``."""
+        self.client = PersistentClient(
+            path=self.db_path, settings=Settings(anonymized_telemetry=False)
+        )
         self.collection = self.client.get_or_create_collection(
             name="endpoint_collection", embedding_function=self.embedding_function
         )
+
+    def reset(self) -> None:
+        """Throw away the on-disk index and start empty.
+
+        The index is a cache that can always be rebuilt from Nautobot's schema, so this is
+        the recovery path for a corrupted store (e.g. ChromaDB "hnsw segment writer" errors).
+        """
+        logger.warning(f"Resetting endpoint index at {self.db_path}")
+        self.client = None
+        self.collection = None
+        try:  # drop chroma's per-path cache of the (broken) store
+            from chromadb.api.client import SharedSystemClient
+
+            SharedSystemClient.clear_system_cache()
+        except Exception:  # noqa: BLE001 - best effort across chromadb versions
+            pass
+        shutil.rmtree(self.db_path, ignore_errors=True)
+        Path(self.db_path).mkdir(parents=True, exist_ok=True)
+        self._open()
 
     def _clean_metadata(self, metadata: dict) -> dict:
         """
@@ -57,17 +81,21 @@ class EndpointSearcherChroma:
         return cleaned
 
     # Chroma rejects single add/upsert calls above its max batch size (~5.4k)
-    _UPSERT_BATCH_SIZE = 500
+    _UPSERT_BATCH_SIZE = 100
 
     @property
     def _hash_file(self) -> Path:
         return Path(self.db_path) / ".schema_hash"
 
-    def initialize_collection(self, force: bool = False) -> bool:
+    def initialize_collection(self, force: bool = False, progress_cb=None) -> bool:
         """Fetch the Swagger schema and (re)index it.
 
         Embedding thousands of endpoints is slow, so indexing is skipped when the schema
         is byte-identical to the one already indexed (unless ``force`` is set).
+
+        Args:
+            force: Re-embed even if the schema is unchanged.
+            progress_cb: Optional ``callable(done, total)`` invoked as endpoints are embedded.
 
         Returns:
             True if the index is up to date afterwards, False if the schema could not be
@@ -115,6 +143,8 @@ class EndpointSearcherChroma:
 
             # upsert (not add): re-running against a persisted collection must not fail
             # or duplicate entries.
+            if progress_cb:
+                progress_cb(0, len(ids))
             for start in range(0, len(ids), self._UPSERT_BATCH_SIZE):
                 end = start + self._UPSERT_BATCH_SIZE
                 self.collection.upsert(
@@ -122,10 +152,14 @@ class EndpointSearcherChroma:
                     metadatas=metadatas[start:end],
                     ids=ids[start:end],
                 )
+                if progress_cb:
+                    progress_cb(min(end, len(ids)), len(ids))
             self._write_schema_hash(schema_hash)
             logger.info(f"Successfully indexed {len(documents)} endpoints.")
+            self.last_error = None
             return True
         except Exception as e:
+            self.last_error = e
             logger.error(f"Failed to initialize endpoints: {e}")
             return False
 

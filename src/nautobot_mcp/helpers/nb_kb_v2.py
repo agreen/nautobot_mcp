@@ -252,11 +252,15 @@ class EnhancedNautobotKnowledge:
 
         return False
 
-    def initialize_all_repositories(self, force: bool = False) -> Dict[str, bool]:
+    def initialize_all_repositories(
+        self, force: bool = False, progress_cb=None
+    ) -> Dict[str, bool]:
         """Initialize or update all configured repositories.
 
         Args:
             force: Force update all repositories
+            progress_cb: Optional ``callable(done, total, repo_name)`` called before each
+                repository (and once more with ``done == total`` at the end)
 
         Returns:
             Dictionary mapping repo names to update status
@@ -266,7 +270,9 @@ class EnhancedNautobotKnowledge:
         repo_configs = self.repo_config_manager.load_repositories()
         results = {}
 
-        for repo_config in repo_configs:
+        for index, repo_config in enumerate(repo_configs):
+            if progress_cb:
+                progress_cb(index, len(repo_configs), repo_config.name)
             try:
                 was_updated = self.update_repository(repo_config, force)
                 results[repo_config.name] = was_updated
@@ -274,6 +280,8 @@ class EnhancedNautobotKnowledge:
                 logger.error(f"Failed to update repository {repo_config.name}: {e}")
                 results[repo_config.name] = False
 
+        if progress_cb:
+            progress_cb(len(repo_configs), len(repo_configs), "")
         logger.info(
             f"Repository initialization complete. Updated: {sum(results.values())}/{len(results)}"
         )
