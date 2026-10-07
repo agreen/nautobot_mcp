@@ -18,7 +18,7 @@ from chromadb import PersistentClient
 from chromadb.config import Settings
 
 from nautobot_mcp.helpers.content_processor import HybridContentProcessor
-from nautobot_mcp.utils import LocalEmbeddingFunction, config, get_chroma_db_path
+from nautobot_mcp.utils import LocalEmbeddingFunction, get_chroma_db_path
 from nautobot_mcp.utils.git_manager import GitRepoManager
 from nautobot_mcp.utils.repo_config import RepositoryConfig, RepositoryConfigManager
 

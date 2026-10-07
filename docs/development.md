@@ -320,7 +320,7 @@ See [Contributing Guide](contributing.md) for:
 ### Debug Mode
 
 ```bash
-LOG_LEVEL=DEBUG python server.py
+LOG_LEVEL=DEBUG nautobot-mcp
 ```
 
 ### VS Code Debugging

@@ -18,7 +18,9 @@ class LocalEmbeddingFunction(EmbeddingFunction):
         # Imported lazily: pulls in onnxruntime/tokenizers.
         from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
 
-        ONNXMiniLM_L6_V2.DOWNLOAD_PATH = Path(get_model_dir()) / ONNXMiniLM_L6_V2.MODEL_NAME
+        ONNXMiniLM_L6_V2.DOWNLOAD_PATH = (
+            Path(get_model_dir()) / ONNXMiniLM_L6_V2.MODEL_NAME
+        )
         self._onnx = ONNXMiniLM_L6_V2()
         # Download + load the model now so failures surface during startup, not mid-search.
         self._onnx(["warmup"])

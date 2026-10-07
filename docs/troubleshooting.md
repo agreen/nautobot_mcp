@@ -59,9 +59,9 @@ ConnectionError: Failed to connect to Nautobot
 
 3. **Check Environment:**
    ```ini
-   # In .env
-   NAUTOBOT_ENV=local
-   NAUTOBOT_URL_LOCAL=http://localhost:8000
+   # In .env (or the MCP client's env block)
+   NAUTOBOT_URL=http://localhost:8000
+   NAUTOBOT_TOKEN=your-token
    ```
 
 ### SSL Certificate Errors
@@ -113,7 +113,7 @@ Copilot doesn't use MCP tools.
 
 2. **Test Manually:**
    ```bash
-   python server.py
+   nautobot-mcp
    # Should show "Server ready"
    ```
 
@@ -240,7 +240,7 @@ cp -r backend/ backend_backup/
 
 # Remove and reinitialize
 rm -rf backend/nautobot_mcp/
-python server.py  # Will recreate
+nautobot-mcp  # Will recreate
 ```
 
 ## API Issues
@@ -297,7 +297,7 @@ LOG_LEVEL=DEBUG
 
 ```bash
 # Run with output
-python server.py 2>&1 | tee server.log
+nautobot-mcp 2>&1 | tee server.log
 
 # In VS Code
 # View → Output → GitHub Copilot Chat

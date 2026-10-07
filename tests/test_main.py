@@ -161,22 +161,30 @@ def test_port_validation():
 
 
 @pytest.mark.unit
-def test_backward_compatibility_server_py():
-    """Test that server.py still works (backward compatibility)."""
-    # Just verify it can be imported
-    import server
+def test_console_script_entry_point_exists():
+    """`nautobot-mcp` / `uvx nautobot-mcp` resolve to main.cli."""
+    from importlib import metadata
 
-    assert hasattr(server, "main")
+    scripts = {
+        ep.name: ep.value
+        for ep in metadata.entry_points(group="console_scripts")
+        if ep.name == "nautobot-mcp"
+    }
+    assert scripts == {"nautobot-mcp": "nautobot_mcp.main:cli"}
+
+    import nautobot_mcp.main as main
+
+    assert callable(main.cli)
 
 
 @pytest.mark.unit
-def test_backward_compatibility_server_http_py():
-    """Test that server_http.py still works (backward compatibility)."""
-    # Just verify it can be imported
-    import server_http
+def test_check_flag_parses():
+    from nautobot_mcp.main import parse_arguments
 
-    assert hasattr(server_http, "main")
-    assert hasattr(server_http, "mcp_app")
+    with patch("sys.argv", ["nautobot-mcp", "--check"]):
+        assert parse_arguments().check is True
+    with patch("sys.argv", ["nautobot-mcp"]):
+        assert parse_arguments().check is False
 
 
 @pytest.mark.unit

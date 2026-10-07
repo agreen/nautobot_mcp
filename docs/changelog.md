@@ -2,6 +2,31 @@
 
 All notable changes to the Nautobot MCP Server will be documented in this file.
 
+## [0.3.0]
+
+### Added
+- Installable package (`src/nautobot_mcp`) with a `nautobot-mcp` console script; runs with `uvx`
+  (`uvx --from git+https://github.com/agreen/nautobot_mcp nautobot-mcp`) and `python -m nautobot_mcp`
+- `--check` flag to verify the Nautobot URL, schema and token
+- `NAUTOBOT_MCP_ENABLE_KB=false` to disable the knowledge base (no GitHub cloning, tools not offered)
+- Non-blocking startup: the MCP handshake is answered immediately; indexes build in the background and
+  index-backed tools return a `not_ready` status until ready. HTTP mode adds `/health` and `/ready`
+- Docker: HTTP by default, healthcheck, `docker-compose.sidecar.yml` for running next to Nautobot
+
+### Changed
+- **Configuration is now plain `NAUTOBOT_URL` / `NAUTOBOT_TOKEN`.** The `NAUTOBOT_ENV` local/nonprod/prod
+  mapping (and `NAUTOBOT_*_BASE_URL` / `NAUTOBOT_*_TOKEN` variables) was removed
+- Embeddings run on ChromaDB's ONNX build of `all-MiniLM-L6-v2` instead of PyTorch/sentence-transformers
+  (install drops from ~4.3 GB to ~0.4 GB). The ~80 MB model downloads on first use; existing vector indexes
+  should be rebuilt. `EMBEDDING_MODEL` is no longer configurable
+- All state lives under `NAUTOBOT_MCP_DATA_DIR` (default `~/.local/share/nautobot-mcp`); the install
+  directory is never written to. User-added repositories moved to `<data dir>/user_repositories.json`
+- Dependency upper bounds (`mcp<2`, `fastmcp<3`, `chromadb<2`) because `uvx` ignores `uv.lock`
+
+### Removed
+- `server.py` / `server_http.py` (use `nautobot-mcp [--mode http]`), the unused `nb_kb_v1.py` and
+  `cache_embedding.py`, the committed `backend/models` directory
+
 ## [Unreleased]
 
 ### Added

@@ -373,31 +373,26 @@ Potential improvements for larger deployments:
 
 ## Configuration Management
 
-### Environment-Based Configuration
+### Environment-Variable Configuration
 
 ```python
-# utils/config.py
+# src/nautobot_mcp/utils/config.py
 class Config:
-    def __init__(self):
-        load_dotenv()
-        self.NAUTOBOT_ENV = os.getenv("NAUTOBOT_ENV", "local")
-        self.NAUTOBOT_URL = self._get_env_url()
-        # ... more config
-    
-    def _get_env_url(self):
-        env_map = {
-            "local": os.getenv("NAUTOBOT_URL_LOCAL"),
-            "nonprod": os.getenv("NAUTOBOT_URL_NONPROD"),
-            "prod": os.getenv("NAUTOBOT_URL_PROD"),
-        }
-        return env_map.get(self.NAUTOBOT_ENV)
+    NAUTOBOT_URL = _nautobot_url()                 # NAUTOBOT_URL, normalized
+    NAUTOBOT_TOKEN = os.getenv("NAUTOBOT_TOKEN", "")
+    ENABLE_KB = _env_bool("NAUTOBOT_MCP_ENABLE_KB", True)
+    # ... timeouts, logging, server identity
 ```
+
+All settings are plain environment variables (see the configuration reference). There is no
+environment-name indirection: point `NAUTOBOT_URL`/`NAUTOBOT_TOKEN` at the instance you want.
+Writable state (indexes, cloned repos, model, user repositories) lives under `NAUTOBOT_MCP_DATA_DIR`.
 
 ### Repository Configuration
 
 Two-tiered system:
 
-1. **Official repositories** (`config/repositories.json`)
+1. **Official repositories** (`src/nautobot_mcp/config/repositories.json`, read-only package data)
    - Maintained by project
    - Version controlled
    - Updates via git pull

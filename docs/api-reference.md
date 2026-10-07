@@ -191,11 +191,11 @@ for result in results:
 ### Configuration Access
 
 ```python
-from utils.config import config
+from nautobot_mcp.utils.config import config
 
 print(f"Nautobot URL: {config.NAUTOBOT_URL}")
-print(f"Environment: {config.NAUTOBOT_ENV}")
-print(f"Model: {config.EMBEDDING_MODEL}")
+print(f"Schema URL: {config.GLOBAL_TOOL_PROMPT}")
+print(f"Knowledge base enabled: {config.ENABLE_KB}")
 ```
 
 ---

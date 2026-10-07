@@ -19,6 +19,7 @@ from nautobot_mcp.helpers.startup import (
 )
 
 ROOT = Path(__file__).resolve().parent.parent
+SRC = ROOT / "src"
 
 
 class FakeSearcher:
@@ -197,7 +198,9 @@ def test_real_builders_hold_the_model_lock(monkeypatch):
     monkeypatch.setattr(
         "nautobot_mcp.helpers.endpoint_searcher_chroma.EndpointSearcherChroma", Probe
     )
-    monkeypatch.setattr("nautobot_mcp.helpers.nb_kb_v2.EnhancedNautobotKnowledge", Probe)
+    monkeypatch.setattr(
+        "nautobot_mcp.helpers.nb_kb_v2.EnhancedNautobotKnowledge", Probe
+    )
     state._build_endpoint_searcher()
     state._build_kb()
     assert seen == [True, True]
@@ -227,7 +230,7 @@ def _imported_after(snippet: str) -> set[str]:
     out = subprocess.run(
         [sys.executable, "-c", code],
         cwd=ROOT,
-        env={"PYTHONPATH": str(ROOT), "PATH": "/usr/bin:/bin", "SSL_VERIFY": "false"},
+        env={"PYTHONPATH": str(SRC), "PATH": "/usr/bin:/bin", "SSL_VERIFY": "false"},
         capture_output=True,
         text=True,
         check=True,
@@ -236,10 +239,11 @@ def _imported_after(snippet: str) -> set[str]:
 
 
 @pytest.mark.unit
-def test_importing_main_does_not_load_torch_or_sentence_transformers():
-    modules = _imported_after("import main")
-    assert "torch" not in modules
-    assert "sentence_transformers" not in modules
+def test_importing_main_does_not_load_heavy_dependencies():
+    modules = _imported_after("import nautobot_mcp.main")
+    # Heavy deps must be imported lazily, in the background workers
+    for heavy in ("chromadb", "onnxruntime", "torch", "sentence_transformers"):
+        assert heavy not in modules, heavy
 
 
 @pytest.mark.unit
@@ -249,44 +253,45 @@ def test_importing_config_makes_no_network_calls():
         "import requests, sys\n"
         "def boom(*a, **k): raise SystemExit('network call at import time')\n"
         "requests.get = boom; requests.Session.request = boom\n"
-        "import utils.config\n"
+        "import nautobot_mcp.utils.config\n"
     )
     subprocess.run(
         [sys.executable, "-c", code],
         cwd=ROOT,
-        env={"PYTHONPATH": str(ROOT), "PATH": "/usr/bin:/bin"},
+        env={"PYTHONPATH": str(SRC), "PATH": "/usr/bin:/bin"},
         check=True,
     )
 
 
 @pytest.mark.unit
 def test_utils_lazy_exports_resolve():
-    import utils
+    from nautobot_mcp import utils
 
     assert utils.config.API_PREFIX
     assert callable(utils.get_chroma_db_path)
-    assert utils.LocalEmbeddingFunction.__name__ == (
-        "LocalEmbeddingFunction"
-    )
+    assert utils.LocalEmbeddingFunction.__name__ == "LocalEmbeddingFunction"
     with pytest.raises(AttributeError):
         utils.does_not_exist
 
 
 @pytest.mark.unit
 def test_data_dir_override(tmp_path, monkeypatch):
-    from nautobot_mcp.utils.path import get_chroma_db_path
+    from nautobot_mcp.utils import path
 
     monkeypatch.setenv("NAUTOBOT_MCP_DATA_DIR", str(tmp_path / "data"))
-    assert get_chroma_db_path() == str(tmp_path / "data")
-    assert (tmp_path / "data").is_dir()
+    assert path.get_data_dir() == tmp_path / "data"
+    assert path.get_chroma_db_path() == str(tmp_path / "data" / "chroma")
+    assert path.get_repo_cache_dir() == str(tmp_path / "data" / "repos")
+    assert path.get_model_dir() == str(tmp_path / "data" / "models")
 
 
 @pytest.mark.unit
-def test_data_dir_default_does_not_require_checkout_named_nautobot_mcp(monkeypatch):
-    from nautobot_mcp.utils.path import get_chroma_db_path
+def test_data_dir_default_is_per_user_not_the_install_dir(tmp_path, monkeypatch):
+    from nautobot_mcp.utils import path
 
     monkeypatch.delenv("NAUTOBOT_MCP_DATA_DIR", raising=False)
-    assert get_chroma_db_path().endswith("backend/nautobot_mcp/db")
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    assert path.get_data_dir() == tmp_path / "nautobot-mcp"
 
 
 # --------------------------------------------------------------------------- HTTP app
@@ -325,6 +330,40 @@ async def test_http_tools_return_not_ready_before_index_is_built():
     tools = await app.get_tools()
     tool = tools["mcp_nautobot_openapi_api_request_schema"]
     result = await tool.run({"query": "devices"})
-    body = json.loads(result[0].text)
+    # fastmcp < 2.10 returns a list of content blocks; later versions a ToolResult
+    blocks = result.content if hasattr(result, "content") else result
+    body = json.loads(blocks[0].text)
     assert body["status"] == "not_ready"
     assert body["component"] == ENDPOINT_INDEX
+
+
+# --------------------------------------------------------------------------- KB toggle
+@pytest.mark.asyncio
+async def test_kb_disabled_never_builds_kb_and_does_not_block_readiness():
+    built = []
+    state = ServerState(enable_kb=False)
+    state._build_endpoint_searcher = lambda: FakeSearcher()
+    state._build_kb = lambda: built.append("kb") or FakeKB()
+    state.start()
+    await wait_for(lambda: state.snapshot()["ready"])
+    assert built == []
+    assert state.status[KB_INDEX].state is ComponentState.DISABLED
+    body = json.loads(state.not_ready_response(KB_INDEX))
+    assert body["status"] == "disabled"
+    await state.stop()
+
+
+@pytest.mark.unit
+def test_kb_tools_removed_from_http_app_when_disabled(monkeypatch):
+    import asyncio as aio
+
+    from nautobot_mcp import main
+
+    monkeypatch.setattr(main.config, "ENABLE_KB", False)
+    tools = aio.run(main.build_http_app(ServerState(enable_kb=False)).get_tools())
+    assert "mcp_nautobot_openapi_api_request_schema" in tools
+    assert not [name for name in tools if "kb" in name]
+
+    monkeypatch.setattr(main.config, "ENABLE_KB", True)
+    tools = aio.run(main.build_http_app(ServerState()).get_tools())
+    assert "mcp_nautobot_kb_semantic_search" in tools

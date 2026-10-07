@@ -74,7 +74,7 @@ class TestEnhancedNautobotKnowledge:
             kb = EnhancedNautobotKnowledge(config_dir=config_dir, cache_dir=cache_dir)
 
             assert kb.db_base_path is not None
-            assert kb.model_name is not None
+            assert kb.embedding_function is not None
             assert kb.repo_clients == {}
             assert kb.repo_collections == {}
 

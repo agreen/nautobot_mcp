@@ -7,8 +7,8 @@
 #
 # Adjust:
 #   * build.context      - path (or git URL) of this repository
-#   * NAUTOBOT_LOCAL_BASE_URL - the compose service name / port of your Nautobot web container
-#   * NAUTOBOT_LOCAL_TOKEN    - an API token for a dedicated Nautobot user
+#   * NAUTOBOT_URL   - the compose service name / port of your Nautobot web container
+#   * NAUTOBOT_TOKEN - an API token for a dedicated Nautobot user
 #
 # MCP clients connect to  http://nautobot-mcp:8000/mcp/  (from inside the compose network).
 services:
@@ -18,9 +18,8 @@ services:
     image: nautobot-mcp:latest
     restart: unless-stopped
     environment:
-      NAUTOBOT_ENV: local
-      NAUTOBOT_LOCAL_BASE_URL: ${NAUTOBOT_MCP_NAUTOBOT_URL:-http://nautobot:8080/}
-      NAUTOBOT_LOCAL_TOKEN: ${NAUTOBOT_MCP_TOKEN:?set NAUTOBOT_MCP_TOKEN to a Nautobot API token}
+      NAUTOBOT_URL: ${NAUTOBOT_MCP_NAUTOBOT_URL:-http://nautobot:8080}
+      NAUTOBOT_TOKEN: ${NAUTOBOT_MCP_TOKEN:?set NAUTOBOT_MCP_TOKEN to a Nautobot API token}
       SSL_VERIFY: ${NAUTOBOT_MCP_SSL_VERIFY:-false}
       MCP_TRANSPORT: http
       MCP_HOST: 0.0.0.0

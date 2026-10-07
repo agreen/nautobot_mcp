@@ -98,7 +98,7 @@ async def test_mcp_server():
 
 if __name__ == "__main__":
     print("🚀 Starting MCP HTTP Server Test")
-    print("Make sure to run 'python server_http.py' in another terminal first!")
+    print("Make sure to run 'nautobot-mcp --mode http' in another terminal first!")
     print("=" * 60)
 
     asyncio.run(test_mcp_server())

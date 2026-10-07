@@ -11,8 +11,6 @@ from typing import Dict, List, Optional
 
 from nautobot_mcp.utils.path import get_data_dir
 
-from nautobot_mcp.utils.path import get_data_dir
-
 logger = logging.getLogger(__name__)
 
 

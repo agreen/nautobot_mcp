@@ -45,21 +45,20 @@ nano .env  # or use your favorite editor
 
 **Minimum required configuration in `.env`:**
 ```bash
-NAUTOBOT_ENV=local  # or nonprod, prod
-GITHUB_TOKEN=your_github_token_here  # for knowledge base
+NAUTOBOT_URL=http://your-nautobot:8080
+NAUTOBOT_TOKEN=your_api_token
+GITHUB_TOKEN=your_github_token_here  # optional: knowledge base rate limits
+# NAUTOBOT_MCP_ENABLE_KB=false       # optional: API tools only, skip cloning GitHub repos
 ```
 
 ### 2. Build and Run
 
-**Option A: stdio mode (for MCP clients)**
 ```bash
-docker compose up -d
+docker compose up -d --build     # HTTP MCP endpoint on http://127.0.0.1:8000/mcp/
 ```
 
-**Option B: HTTP mode (for web integrations)**
-```bash
-MCP_TRANSPORT=http docker compose up -d
-```
+For a stdio client that launches the container itself, see "stdio mode" under
+[Transport Modes](#transport-modes).
 
 ### 3. Verify It's Running
 
@@ -69,6 +68,10 @@ docker compose ps
 
 # Follow logs
 docker compose logs -f
+
+# Liveness / readiness
+curl -s localhost:8000/health
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8000/ready   # 503 until indexes are built
 ```
 
 ## Docker Image Optimizations
@@ -246,8 +249,8 @@ with the configured token. To test from the host, publish it on loopback only
 
 ChromaDB indexes and cloned knowledge-base repositories live in one volume mounted at
 `/data` (`NAUTOBOT_MCP_DATA_DIR=/data/chroma`, `NAUTOBOT_MCP_REPO_CACHE=/data/repos`). The
-embedding model is baked into the image at build time (the server loads it offline), so no
-model volume is needed.
+embedding model (ONNX build of all-MiniLM-L6-v2, ~80 MB) is baked into the image at build time
+and lives in `/data/models`; if the volume lacks it, the server downloads it on first start.
 
 ```bash
 # Backup a volume
@@ -320,7 +323,7 @@ docker compose up -d
 
 ```bash
 # Check volume permissions
-docker compose exec nautobot-mcp ls -la /app/backend/
+docker compose exec nautobot-mcp ls -la /data/
 
 # Recreate volumes if needed
 docker compose down -v
@@ -355,11 +358,9 @@ Add this to your VS Code MCP configuration:
         "/path/to/nautobot_mcp/.env",
         "-v",
         "nautobot-mcp-data:/data",
-        "-v",
-        "nautobot-mcp-models:/app/backend/models",
-        "nautobot-mcp:latest",
-        "--mode",
-        "stdio"
+        "-e",
+        "MCP_TRANSPORT=stdio",
+        "nautobot-mcp:latest"
       ]
     }
   }

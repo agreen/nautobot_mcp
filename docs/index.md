@@ -79,7 +79,7 @@ cp .env.example .env
 # Edit .env with your settings
 
 # Run
-python server.py
+nautobot-mcp
 ```
 
 ## Use Cases

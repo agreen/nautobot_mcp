@@ -35,7 +35,9 @@ class TestEndpointSearcherChroma:
     @pytest.fixture
     def mock_config(self):
         """Mock configuration values."""
-        with patch("nautobot_mcp.helpers.endpoint_searcher_chroma.config") as mock_config:
+        with patch(
+            "nautobot_mcp.helpers.endpoint_searcher_chroma.config"
+        ) as mock_config:
             mock_config.GLOBAL_TOOL_PROMPT = "http://test.com/api/swagger.json"
             mock_config.NAUTOBOT_TOKEN = "test_token_123"
             mock_config.EMBEDDING_MODEL = "all-MiniLM-L6-v2"
@@ -44,7 +46,9 @@ class TestEndpointSearcherChroma:
     @pytest.fixture
     def mock_chroma_db_path(self, temp_db_path):
         """Mock the get_chroma_db_path function."""
-        with patch("nautobot_mcp.helpers.endpoint_searcher_chroma.get_chroma_db_path") as mock_path:
+        with patch(
+            "nautobot_mcp.helpers.endpoint_searcher_chroma.get_chroma_db_path"
+        ) as mock_path:
             mock_path.return_value = temp_db_path
             yield mock_path
 
@@ -139,18 +143,13 @@ class TestEndpointSearcherChroma:
             # Verify configuration
             assert searcher.base_url == "http://test.com/api/swagger.json"
             assert searcher.token == "test_token_123"
-            assert searcher.model_name == "all-MiniLM-L6-v2"
 
             # Verify ChromaDB client setup
             mock_client_class.assert_called_once()
             mock_client.get_or_create_collection.assert_called_once()
 
             # Verify embedding function setup
-            mock_embedding_class.assert_called_once_with(
-                model_name="all-MiniLM-L6-v2",
-                cache_dir=searcher.model_cache_dir,
-                local_files_only=True,
-            )
+            mock_embedding_class.assert_called_once_with()
 
     def test_clean_metadata_with_simple_types(self, mock_searcher):
         """Test _clean_metadata with simple data types."""
@@ -503,7 +502,9 @@ class TestEndpointSearcherChroma:
         self, mock_searcher, sample_openapi_schema
     ):
         """Test that metadata cleaning is applied during initialization."""
-        with patch("nautobot_mcp.helpers.endpoint_searcher_chroma.requests.get") as mock_get:
+        with patch(
+            "nautobot_mcp.helpers.endpoint_searcher_chroma.requests.get"
+        ) as mock_get:
             mock_response = Mock()
             mock_response.json.return_value = sample_openapi_schema
             mock_response.content = b"schema"
@@ -553,12 +554,6 @@ class TestEndpointSearcherChroma:
                 call_args = mock_client_class.call_args
                 assert call_args.kwargs["path"] == expected_db_path
 
-    def test_model_cache_dir_setup(self, mock_searcher):
-        """Test that model cache directory is set up correctly."""
-        # The actual path will be different due to how the module is loaded in tests
-        # Just verify it contains the expected suffix
-        assert mock_searcher.model_cache_dir.endswith("backend/models")
-
     @pytest.mark.parametrize(
         "query,expected_n_results",
         [
@@ -592,7 +587,9 @@ class TestEndpointSearcherChroma:
             patch(
                 "nautobot_mcp.helpers.endpoint_searcher_chroma.LocalEmbeddingFunction"
             ),
-            patch("nautobot_mcp.helpers.endpoint_searcher_chroma.requests.get") as mock_get,
+            patch(
+                "nautobot_mcp.helpers.endpoint_searcher_chroma.requests.get"
+            ) as mock_get,
         ):
             # Setup mocks
             mock_client = Mock()

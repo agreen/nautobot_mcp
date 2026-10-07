@@ -36,12 +36,10 @@ A Model Context Protocol (MCP) server for interacting with Nautobot APIs using s
 
 ## 📋 Prerequisites
 
-- Python 3.11+ (< 3.12)
-- Access to a Nautobot instance
-- Git (for repository cloning and updates)
-- GitHub token (for accessing repositories)
-
-
+- Python 3.11 or 3.12 (`uvx` / `uv` will fetch it for you)
+- Access to a Nautobot instance and an API token
+- Git (only for the optional knowledge base, which clones GitHub repositories)
+- Internet access on first run to download the ~80 MB embedding model (see [Embedding model](#embedding-model))
 
 ## Design Overview
 
@@ -49,282 +47,108 @@ A Model Context Protocol (MCP) server for interacting with Nautobot APIs using s
 
 ## 🛠️ Installation
 
-### Option 1: Docker Installation (Recommended)
+### Option 1: `uvx` (MetaMCP, Claude Desktop, any stdio MCP client)
 
-The easiest way to run the Nautobot MCP server is using Docker:
+```bash
+uvx --from git+https://github.com/agreen/nautobot_mcp nautobot-mcp
+```
 
-1. **Clone the repository**:
-   ```bash
-   git clone <repository-url>
-   cd nautobot_mcp
-   ```
+Configure it with environment variables. For example in an MCP client / MetaMCP server definition:
 
-2. **Configure environment variables**:
-   ```bash
-   cp .env.example .env
-   # Edit .env with your configuration
-   ```
+```json
+{
+  "command": "uvx",
+  "args": ["--from", "git+https://github.com/agreen/nautobot_mcp", "nautobot-mcp"],
+  "env": {
+    "NAUTOBOT_URL": "https://nautobot.example.com",
+    "NAUTOBOT_TOKEN": "your-api-token",
+    "NAUTOBOT_MCP_ENABLE_KB": "false"
+  }
+}
+```
 
-3. **Run with Docker Compose**:
-   ```bash
-   # For stdio mode (default)
-   docker compose up -d
-   
-   # For HTTP mode
-   MCP_TRANSPORT=http MCP_PORT=8000 docker compose up -d
-   ```
+Notes:
 
-### Option 2: Local Python Installation
+- **First launch installs ~130 packages (≈30 s on a fast connection).** Pre-warm it once
+  (`uvx --from git+https://github.com/agreen/nautobot_mcp nautobot-mcp --help`) if your client has a short connect
+  timeout. After that the MCP handshake takes under a second.
+- **The server answers the handshake immediately** and builds its search indexes in the background. Index-backed
+  tools return `{"status": "not_ready", ...}` until they are built (first run: model download + indexing, a minute or
+  two; later runs: seconds). `nautobot_dynamic_api_request` never waits.
+- `nautobot-mcp --check` verifies the URL, schema and token and exits.
+- State (indexes, model, cloned repos) is kept in `~/.local/share/nautobot-mcp`; set `NAUTOBOT_MCP_DATA_DIR` to move it.
 
-1. **Clone the repository**:
-   ```bash
-   git clone <repository-url>
-   cd nautobot_mcp
-   ```
+### Option 2: Docker / sidecar next to Nautobot
 
-2. **Install dependencies**:
-   ```bash
-   # Using uv (recommended)
-   uv sync
+See [DOCKER.md](DOCKER.md) and `docker-compose.sidecar.yml`. The image runs the HTTP transport on port 8000
+(`/mcp/`), bakes in the embedding model, and exposes `/health` and `/ready`.
 
-   # Or using pip
-   pip install -e .
-   ```
+### Option 3: From source
 
-3. **Configure environment variables**:
-   ```bash
-   cp .env.example .env
-   # Edit .env with your configuration
-   ```
+```bash
+git clone https://github.com/agreen/nautobot_mcp && cd nautobot_mcp
+uv sync                 # creates .venv with dev dependencies
+cp .env.example .env    # set NAUTOBOT_URL / NAUTOBOT_TOKEN
+uv run nautobot-mcp --check
+uv run nautobot-mcp                 # stdio
+uv run nautobot-mcp --mode http     # HTTP on 127.0.0.1:8000
+```
 
 ## ⚙️ Configuration
 
-### Environment Variables
+Everything is a plain environment variable (a `.env` file in the working directory is also read). There is no
+"environment" switch: point `NAUTOBOT_URL` / `NAUTOBOT_TOKEN` at whichever Nautobot you want.
 
-Create a `.env` file with the following variables:
+| Variable | Default | Description |
+|---|---|---|
+| `NAUTOBOT_URL` | `http://localhost:8080` | Nautobot base URL (a trailing `/api` is tolerated) |
+| `NAUTOBOT_TOKEN` | *(empty)* | API token |
+| `SSL_VERIFY` | `true` | Set `false` for self-signed certificates |
+| `NAUTOBOT_MCP_ENABLE_KB` | `true` | Enable the knowledge-base tools (clones and indexes Nautobot GitHub repos). Set `false` for API-only use |
+| `GITHUB_TOKEN` | *(empty)* | Higher GitHub rate limits for the knowledge base |
+| `NAUTOBOT_MCP_DATA_DIR` | `~/.local/share/nautobot-mcp` | Indexes, cloned repos, embedding model, user-added repos |
+| `MCP_TRANSPORT` / `MCP_HOST` / `MCP_PORT` | `stdio` / `127.0.0.1` / `8000` | Transport settings (CLI flags `--mode/--host/--port` win) |
+| `API_TIMEOUT` | `10` | Seconds per Nautobot API call |
+| `SCHEMA_TIMEOUT` | `120` | Seconds to fetch the Swagger schema |
+| `DEFAULT_SEARCH_RESULTS` | `5` | Default result count for schema search |
+| `API_PREFIX` | `nautobot_openapi` | Prefix of the schema-search tool name |
+| `LOG_LEVEL` | `INFO` | Logging level (logs go to stderr) |
 
-```bash
-# Nautobot API Configuration
-NAUTOBOT_TOKEN=your_nautobot_api_token
-NAUTOBOT_ENV=local  # Options: local, nonprod, prod
+### Embedding model
 
-# Environment-specific URLs and tokens
-NAUTOBOT_NONPROD_BASE_URL=https://nautobot-nonprod.example.com/
-NAUTOBOT_NONPROD_TOKEN=your_nonprod_token
-NAUTOBOT_PROD_BASE_URL=https://nautobot.example.com/
-NAUTOBOT_PROD_TOKEN=your_prod_token
+Semantic search uses `all-MiniLM-L6-v2` through ChromaDB's bundled ONNX runtime (no PyTorch). The ~80 MB model is
+downloaded from ChromaDB's model bucket on first use into `<data dir>/models`; the Docker image ships it pre-baked.
+For air-gapped hosts, copy a populated `models/` directory into the data dir.
 
-# GitHub Configuration (for knowledge base)
-GITHUB_TOKEN=your_github_token
+### Repository Configuration (knowledge base)
 
-# Optional Configuration
-SSL_VERIFY=False  # Set to True for production
-POSTHOG_API_KEY=disable  # Analytics (optional)
-```
-
-### Repository Configuration
-
-The knowledge base automatically indexes official Nautobot repositories. You can customize this by editing:
-- `config/repositories.json` - Official and community repositories
-- `config/user_repositories.json` - Your custom repositories
-
-Example repository configuration:
-```json
-{
-  "name": "nautobot/nautobot",
-  "description": "Core Nautobot application",
-  "priority": 1,
-  "enabled": true,
-  "branch": "develop",
-  "file_patterns": [".py", ".md", ".txt", ".rst", ".yaml", ".yml"]
-}
-```
-
-### Configuration Options Reference
-
-| Environment Variable | Default | Description |
-|---------------------|---------|-------------|
-| `NAUTOBOT_TOKEN` | `` | API token for authentication |
-| `NAUTOBOT_ENV` | `local` | Environment selection (local/nonprod/prod) |
-| `GITHUB_TOKEN` | `""` | GitHub token for repository access |
-| `API_PREFIX` | `nautobot_openapi` | MCP tool prefix |
-| `SERVER_NAME` | `any_openapi` | MCP server name |
-| `SERVER_VERSION` | `0.2.0` | Server version |
-| `LOG_LEVEL` | `INFO` | Logging level |
-| `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Sentence transformer model |
-| `DEFAULT_SEARCH_RESULTS` | `5` | Default number of search results |
-| `POSTHOG_API_KEY` | `disable` | PostHog analytics API key |
-| `API_TIMEOUT` | `10` | Request timeout in seconds |
-| `SSL_VERIFY` | `True` | SSL certificate verification |
-
+The default repositories are listed in `src/nautobot_mcp/config/repositories.json` (read-only package data).
+Repositories added with the `nautobot_kb_add_repo` tool are stored in `<data dir>/user_repositories.json`.
 
 ## 🚀 Usage
 
-### Starting the MCP Server
-
-#### Docker Usage
-
-**stdio mode (for MCP clients like Claude Desktop, VS Code, etc.):**
 ```bash
-# Using docker compose
-docker compose up -d
-
-# Or using docker run
-docker run -d \
-  --name nautobot-mcp \
-  --env-file .env \
-  -v nautobot-mcp-data:/data \
-  -v nautobot-mcp-models:/app/backend/models \
-  nautobot-mcp:latest --mode stdio
+nautobot-mcp                      # stdio (default)
+nautobot-mcp --mode http          # streamable HTTP at http://127.0.0.1:8000/mcp/
+nautobot-mcp --mode http --host 0.0.0.0 --port 9000
+python -m nautobot_mcp --check    # verify configuration
 ```
 
-**HTTP mode (for web-based integrations):**
-```bash
-# Using docker compose
-MCP_TRANSPORT=http MCP_PORT=8000 docker compose up -d
+HTTP mode also serves `GET /health` (liveness) and `GET /ready` (503 until indexes are built). The HTTP endpoint has
+**no authentication** and can write to Nautobot with your token; bind it to loopback or keep it on a private network.
 
-# Or using docker run
-docker run -d \
-  --name nautobot-mcp \
-  --env-file .env \
-  -e MCP_TRANSPORT=http \
-  -e MCP_PORT=8000 \
-  -p 8000:8000 \
-  -v nautobot-mcp-data:/data \
-  -v nautobot-mcp-models:/app/backend/models \
-  nautobot-mcp:latest --mode http --port 8000
-```
+### VS Code / Claude Desktop (stdio)
 
-**View logs:**
-```bash
-# Follow logs
-docker compose logs -f
-
-# View last 100 lines
-docker compose logs --tail=100
-```
-
-**Stop the server:**
-```bash
-docker compose down
-
-# To also remove volumes (warning: deletes ChromaDB data)
-docker compose down -v
-```
-
-#### Local Python Usage
-
-**stdio mode:**
-```bash
-python main.py
-# or
-python main.py --mode stdio
-```
-
-**HTTP mode:**
-```bash
-python main.py --mode http
-# or with custom port
-python main.py --mode http --port 9000
-```
-
-**Legacy server files (still supported):**
-```bash
-# stdio mode
-python server.py
-
-# HTTP mode
-python server_http.py
-```
-
-The server will automatically:
-1. Initialize the ChromaDB collections
-2. Refresh the API endpoint index
-3. Update the knowledge base from configured repositories
-4. Start serving MCP requests
-
-### Integration with VS Code Copilot
-
-Add to your VS Code MCP settings to use with GitHub Copilot:
-1. VS Code: Command Palete:
-2. '>MCP: Open User Configuration'
-
-**Local Installation:**
 ```json
 {
-	"servers": {
-		"nautobot_mcp": {
-			"type": "stdio",
-			"command": "uv",
-			"args": [
-				"run",
-				"--directory",
-				"/path/to/nautobot_mcp",
-				"python",
-				"main.py",
-				"--mode",
-				"stdio"
-			]
-		}
-	},
-	"inputs": []
+  "servers": {
+    "nautobot": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/agreen/nautobot_mcp", "nautobot-mcp"],
+      "env": { "NAUTOBOT_URL": "https://nautobot.example.com", "NAUTOBOT_TOKEN": "..." }
+    }
+  }
 }
-```
-
-**Docker Installation:**
-```json
-{
-	"servers": {
-		"nautobot_mcp": {
-			"type": "stdio",
-			"command": "docker",
-			"args": [
-				"run",
-				"-i",
-				"--rm",
-				"--env-file",
-				"/path/to/nautobot_mcp/.env",
-				"-v",
-				"nautobot-mcp-data:/data",
-				"-v",
-				"nautobot-mcp-models:/app/backend/models",
-				"nautobot-mcp:latest",
-				"--mode",
-				"stdio"
-			]
-		}
-	},
-	"inputs": []
-}
-```
-
-### Docker Configuration Notes
-
-**Data Persistence:**
-- ChromaDB data is stored in the `nautobot-mcp-data` volume
-- Sentence transformer models are cached in the `nautobot-mcp-models` volume
-- Volumes persist across container restarts and rebuilds
-- To reset the knowledge base, remove the volumes: `docker compose down -v`
-
-**Environment Variables:**
-- All configuration is done through the `.env` file
-- The `.env` file is loaded automatically when using `docker compose`
-- For `docker run`, use `--env-file .env` or `-e VAR=value` for individual variables
-
-**Transport Modes:**
-- **stdio mode**: For integration with MCP clients (Claude Desktop, VS Code, etc.)
-- **HTTP mode**: For web-based integrations or REST API access
-- Switch modes by setting `MCP_TRANSPORT=http` or `MCP_TRANSPORT=stdio`
-
-**Resource Management:**
-- Default limits: 2 CPU cores, 4GB RAM
-- Adjust in `docker compose.yml` under `deploy.resources`
-- Monitor usage: `docker stats nautobot-mcp-server`
-
-**Logs:**
-- View logs: `docker compose logs -f`
-- Logs are rotated (max 10MB per file, 3 files retained)
-- Adjust in `docker compose.yml` under `logging`
 ```
 
 ### Example API Requests
@@ -355,38 +179,21 @@ query = "how to create custom fields in Nautobot"
 
 ```
 nautobot_mcp/
-├── server.py                 # Main MCP server
-├── pyproject.toml            # Project configuration
-├── .env                      # Environment variables
-│
-├── config/                   # Configuration files
-│   ├── repositories.json     # Official repository definitions
-│   └── user_repositories.json # User-defined repositories
-│
-├── helpers/                  # Core modules
-│   ├── nb_kb_v2.py          # Enhanced knowledge base
-│   ├── endpoint_searcher_chroma.py # API endpoint search
-│   ├── content_processor.py  # Document processing
-│   └── manage_repos.py       # Repository management
-│
-├── utils/                    # Utility modules
-│   ├── config.py            # Configuration management
-│   ├── embedding.py         # Vector embedding utilities
-│   ├── git_manager.py       # Git operations
-│   └── repo_config.py       # Repository configuration
-│
-├── examples/                 # Usage examples
-│   ├── example_kb_search.py  # Knowledge base search demo
-│   ├── config_demo.py       # Configuration examples
-│   └── pynautobot_kb_example/ # PyNautobot integration
-│
-├── tests/                    # Test suite
-│   ├── test_nb_kb_v2.py     # Knowledge base tests
-│   ├── test_endpoint_searcher_chroma.py # API search tests
-│   └── test_manage_repos.py  # Repository management tests
-│
-└── backend/                  # Data storage
-    └── models/               # Cached embedding models
+├── pyproject.toml            # package metadata, `nautobot-mcp` console script
+├── src/nautobot_mcp/
+│   ├── main.py               # entrypoint: stdio + HTTP transports, tool registration
+│   ├── config/repositories.json   # default knowledge-base repositories
+│   ├── helpers/
+│   │   ├── startup.py        # background index building (non-blocking handshake)
+│   │   ├── tool_handlers.py  # tool implementations
+│   │   ├── tool_definitions.py
+│   │   ├── endpoint_searcher_chroma.py   # Swagger endpoint index
+│   │   ├── nb_kb_v2.py       # knowledge base (per-repository vector stores)
+│   │   └── content_processor.py
+│   └── utils/                # config, paths, embedding, git + repo config
+├── tests/
+├── Dockerfile, docker-compose.yml, docker-compose.sidecar.yml
+└── docs/
 ```
 
 ## 🔧 Development
@@ -427,7 +234,7 @@ To add repositories to the knowledge base:
 
 1. **Add to configuration**:
    ```python
-   from helpers.manage_repos import RepositoryManager
+   from nautobot_mcp.helpers.manage_repos import RepositoryManager
    
    manager = RepositoryManager()
    manager.add_repository("owner/repo", category="custom", description="My custom repo")
@@ -443,7 +250,7 @@ To add repositories to the knowledge base:
 ### Basic Knowledge Base Search
 
 ```python
-from helpers.nb_kb_v2 import EnhancedNautobotKnowledge
+from nautobot_mcp.helpers.nb_kb_v2 import EnhancedNautobotKnowledge
 
 kb = EnhancedNautobotKnowledge()
 results = kb.search("custom field validation", n_results=5)
@@ -457,7 +264,7 @@ for result in results:
 ### API Endpoint Discovery
 
 ```python
-from helpers.endpoint_searcher_chroma import EndpointSearcherChroma
+from nautobot_mcp.helpers.endpoint_searcher_chroma import EndpointSearcherChroma
 
 searcher = EndpointSearcherChroma()
 endpoints = searcher.search("create new device", n_results=3)
@@ -472,7 +279,7 @@ for endpoint in endpoints:
 
 ```python
 import requests
-from utils.config import config
+from nautobot_mcp.utils.config import config
 
 # Example: Get device count
 response = requests.get(
@@ -536,10 +343,10 @@ Test your configuration and server setup:
 
 ```bash
 # Test configuration
-uv run python -c "from utils.config import config; print('Config OK:', config.SERVER_NAME)"
+uv run nautobot-mcp --check
 
 # Test server initialization
-uv run python -c "from server import main; print('Server imports OK')"
+uv run python -c "import nautobot_mcp.main; print('Server imports OK')"
 ```
 
 ## 🛠️ MCP Tools Available
@@ -666,7 +473,8 @@ LOG_LEVEL=DEBUG
 - [Nautobot](https://github.com/nautobot/nautobot) - Network automation platform
 - [Model Context Protocol](https://github.com/modelcontextprotocol/python-sdk) - MCP Python SDK
 - [ChromaDB](https://github.com/chroma-core/chroma) - Vector database
-- [Sentence Transformers](https://github.com/UKPLab/sentence-transformers) - Embedding models
+- [ChromaDB](https://www.trychroma.com/) - Vector store and bundled ONNX embedding runtime
+- [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) - Embedding model
 
 ## 📝 License
 

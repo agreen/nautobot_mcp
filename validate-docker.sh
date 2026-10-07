@@ -76,17 +76,17 @@ if [ -f .env ]; then
     
     # Safely parse required variables from .env without executing its contents
     # Only parse KEY=VALUE lines, ignore comments and empty lines
-    if [ -z "${NAUTOBOT_ENV+x}" ]; then
-        NAUTOBOT_ENV=$(grep -E '^[[:space:]]*NAUTOBOT_ENV=' .env 2>/dev/null | head -n1 | cut -d '=' -f2- | sed 's/^["'\'']\(.*\)["'\'']$/\1/')
+    if [ -z "${NAUTOBOT_URL+x}" ]; then
+        NAUTOBOT_URL=$(grep -E '^[[:space:]]*NAUTOBOT_URL=' .env 2>/dev/null | head -n1 | cut -d '=' -f2- | sed 's/^["'\'']\(.*\)["'\'']$/\1/')
     fi
     if [ -z "${GITHUB_TOKEN+x}" ]; then
         GITHUB_TOKEN=$(grep -E '^[[:space:]]*GITHUB_TOKEN=' .env 2>/dev/null | head -n1 | cut -d '=' -f2- | sed 's/^["'\'']\(.*\)["'\'']$/\1/')
     fi
     
-    if [ -n "$NAUTOBOT_ENV" ]; then
-        print_success "NAUTOBOT_ENV is set: $NAUTOBOT_ENV"
+    if [ -n "$NAUTOBOT_URL" ]; then
+        print_success "NAUTOBOT_URL is set: $NAUTOBOT_URL"
     else
-        print_warning "NAUTOBOT_ENV is not set (defaulting to 'local')"
+        print_warning "NAUTOBOT_URL is not set (defaulting to http://localhost:8080)"
     fi
     
     if [ -n "$GITHUB_TOKEN" ]; then

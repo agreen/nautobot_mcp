@@ -2,7 +2,7 @@
 #
 # To run it next to an existing Nautobot stack, use docker-compose.sidecar.yml instead.
 #
-#   cp .env.example .env     # set NAUTOBOT_ENV / URL / token
+#   cp .env.example .env     # set NAUTOBOT_URL / NAUTOBOT_TOKEN
 #   docker compose up -d --build
 #   curl localhost:8000/health   # liveness: up as soon as the process is serving
 #   curl localhost:8000/ready    # 503 until the endpoint + KB indexes are built
