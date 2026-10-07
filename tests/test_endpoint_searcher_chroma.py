@@ -18,7 +18,7 @@ import requests
 # Add the parent directory to Python path to enable imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from helpers.endpoint_searcher_chroma import EndpointSearcherChroma
+from nautobot_mcp.helpers.endpoint_searcher_chroma import EndpointSearcherChroma
 
 
 class TestEndpointSearcherChroma:
@@ -35,7 +35,7 @@ class TestEndpointSearcherChroma:
     @pytest.fixture
     def mock_config(self):
         """Mock configuration values."""
-        with patch("helpers.endpoint_searcher_chroma.config") as mock_config:
+        with patch("nautobot_mcp.helpers.endpoint_searcher_chroma.config") as mock_config:
             mock_config.GLOBAL_TOOL_PROMPT = "http://test.com/api/swagger.json"
             mock_config.NAUTOBOT_TOKEN = "test_token_123"
             mock_config.EMBEDDING_MODEL = "all-MiniLM-L6-v2"
@@ -44,7 +44,7 @@ class TestEndpointSearcherChroma:
     @pytest.fixture
     def mock_chroma_db_path(self, temp_db_path):
         """Mock the get_chroma_db_path function."""
-        with patch("helpers.endpoint_searcher_chroma.get_chroma_db_path") as mock_path:
+        with patch("nautobot_mcp.helpers.endpoint_searcher_chroma.get_chroma_db_path") as mock_path:
             mock_path.return_value = temp_db_path
             yield mock_path
 
@@ -99,10 +99,10 @@ class TestEndpointSearcherChroma:
         """Create a mocked EndpointSearcherChroma instance."""
         with (
             patch(
-                "helpers.endpoint_searcher_chroma.PersistentClient"
+                "nautobot_mcp.helpers.endpoint_searcher_chroma.PersistentClient"
             ) as mock_client_class,
             patch(
-                "helpers.endpoint_searcher_chroma.SentenceTransformerEmbeddingFunction"
+                "nautobot_mcp.helpers.endpoint_searcher_chroma.LocalEmbeddingFunction"
             ) as mock_embedding_class,
         ):
             # Setup mock client and collection
@@ -123,10 +123,10 @@ class TestEndpointSearcherChroma:
         """Test EndpointSearcherChroma initialization."""
         with (
             patch(
-                "helpers.endpoint_searcher_chroma.PersistentClient"
+                "nautobot_mcp.helpers.endpoint_searcher_chroma.PersistentClient"
             ) as mock_client_class,
             patch(
-                "helpers.endpoint_searcher_chroma.SentenceTransformerEmbeddingFunction"
+                "nautobot_mcp.helpers.endpoint_searcher_chroma.LocalEmbeddingFunction"
             ) as mock_embedding_class,
         ):
             mock_client = Mock()
@@ -227,8 +227,8 @@ class TestEndpointSearcherChroma:
         }
         assert result == expected
 
-    @patch("helpers.endpoint_searcher_chroma.config.SSL_VERIFY", True)
-    @patch("helpers.endpoint_searcher_chroma.requests.get")
+    @patch("nautobot_mcp.helpers.endpoint_searcher_chroma.config.SSL_VERIFY", True)
+    @patch("nautobot_mcp.helpers.endpoint_searcher_chroma.requests.get")
     def test_initialize_collection_success(
         self, mock_get, mock_searcher, sample_openapi_schema
     ):
@@ -276,8 +276,8 @@ class TestEndpointSearcherChroma:
         assert device_get_meta["operation_id"] == "dcim_devices_list"
         assert device_get_meta["description"] == "List all devices in DCIM"
 
-    @patch("helpers.endpoint_searcher_chroma.config.SSL_VERIFY", False)
-    @patch("helpers.endpoint_searcher_chroma.requests.get")
+    @patch("nautobot_mcp.helpers.endpoint_searcher_chroma.config.SSL_VERIFY", False)
+    @patch("nautobot_mcp.helpers.endpoint_searcher_chroma.requests.get")
     def test_initialize_collection_no_token(
         self, mock_get, mock_searcher, sample_openapi_schema
     ):
@@ -298,7 +298,7 @@ class TestEndpointSearcherChroma:
             timeout=ANY,
         )
 
-    @patch("helpers.endpoint_searcher_chroma.requests.get")
+    @patch("nautobot_mcp.helpers.endpoint_searcher_chroma.requests.get")
     def test_initialize_collection_request_failure(self, mock_get, mock_searcher):
         """Test initialization with request failure."""
         mock_get.side_effect = requests.RequestException("Connection failed")
@@ -308,7 +308,7 @@ class TestEndpointSearcherChroma:
 
         mock_searcher.collection.upsert.assert_not_called()
 
-    @patch("helpers.endpoint_searcher_chroma.requests.get")
+    @patch("nautobot_mcp.helpers.endpoint_searcher_chroma.requests.get")
     def test_initialize_collection_http_error(self, mock_get, mock_searcher):
         """Test initialization with HTTP error response."""
         mock_response = Mock()
@@ -320,7 +320,7 @@ class TestEndpointSearcherChroma:
 
         mock_searcher.collection.upsert.assert_not_called()
 
-    @patch("helpers.endpoint_searcher_chroma.requests.get")
+    @patch("nautobot_mcp.helpers.endpoint_searcher_chroma.requests.get")
     def test_initialize_collection_invalid_json(self, mock_get, mock_searcher):
         """Test initialization with invalid JSON response."""
         mock_response = Mock()
@@ -332,7 +332,7 @@ class TestEndpointSearcherChroma:
 
         mock_searcher.collection.upsert.assert_not_called()
 
-    @patch("helpers.endpoint_searcher_chroma.requests.get")
+    @patch("nautobot_mcp.helpers.endpoint_searcher_chroma.requests.get")
     def test_initialize_collection_empty_paths(self, mock_get, mock_searcher):
         """Test initialization with empty paths in schema."""
         empty_schema = {"paths": {}}
@@ -503,7 +503,7 @@ class TestEndpointSearcherChroma:
         self, mock_searcher, sample_openapi_schema
     ):
         """Test that metadata cleaning is applied during initialization."""
-        with patch("helpers.endpoint_searcher_chroma.requests.get") as mock_get:
+        with patch("nautobot_mcp.helpers.endpoint_searcher_chroma.requests.get") as mock_get:
             mock_response = Mock()
             mock_response.json.return_value = sample_openapi_schema
             mock_response.content = b"schema"
@@ -532,15 +532,15 @@ class TestEndpointSearcherChroma:
         mock_config.EMBEDDING_MODEL = "test-model"
 
         with patch(
-            "helpers.endpoint_searcher_chroma.get_chroma_db_path",
+            "nautobot_mcp.helpers.endpoint_searcher_chroma.get_chroma_db_path",
             return_value=temp_db_path,
         ):
             with (
                 patch(
-                    "helpers.endpoint_searcher_chroma.PersistentClient"
+                    "nautobot_mcp.helpers.endpoint_searcher_chroma.PersistentClient"
                 ) as mock_client_class,
                 patch(
-                    "helpers.endpoint_searcher_chroma.SentenceTransformerEmbeddingFunction"
+                    "nautobot_mcp.helpers.endpoint_searcher_chroma.LocalEmbeddingFunction"
                 ),
             ):
                 searcher = EndpointSearcherChroma()
@@ -587,12 +587,12 @@ class TestEndpointSearcherChroma:
         """Integration test covering initialization and search workflow."""
         with (
             patch(
-                "helpers.endpoint_searcher_chroma.PersistentClient"
+                "nautobot_mcp.helpers.endpoint_searcher_chroma.PersistentClient"
             ) as mock_client_class,
             patch(
-                "helpers.endpoint_searcher_chroma.SentenceTransformerEmbeddingFunction"
+                "nautobot_mcp.helpers.endpoint_searcher_chroma.LocalEmbeddingFunction"
             ),
-            patch("helpers.endpoint_searcher_chroma.requests.get") as mock_get,
+            patch("nautobot_mcp.helpers.endpoint_searcher_chroma.requests.get") as mock_get,
         ):
             # Setup mocks
             mock_client = Mock()
@@ -633,13 +633,13 @@ class TestInitializeCollectionRobustness:
     @pytest.fixture
     def searcher(self, tmp_path):
         with (
-            patch("helpers.endpoint_searcher_chroma.config") as cfg,
-            patch("helpers.endpoint_searcher_chroma.PersistentClient"),
+            patch("nautobot_mcp.helpers.endpoint_searcher_chroma.config") as cfg,
+            patch("nautobot_mcp.helpers.endpoint_searcher_chroma.PersistentClient"),
             patch(
-                "helpers.endpoint_searcher_chroma.SentenceTransformerEmbeddingFunction"
+                "nautobot_mcp.helpers.endpoint_searcher_chroma.LocalEmbeddingFunction"
             ),
             patch(
-                "helpers.endpoint_searcher_chroma.get_chroma_db_path",
+                "nautobot_mcp.helpers.endpoint_searcher_chroma.get_chroma_db_path",
                 return_value=str(tmp_path),
             ),
         ):
@@ -669,7 +669,7 @@ class TestInitializeCollectionRobustness:
         return r
 
     def test_upserts_in_batches(self, searcher):
-        with patch("helpers.endpoint_searcher_chroma.requests.get") as get:
+        with patch("nautobot_mcp.helpers.endpoint_searcher_chroma.requests.get") as get:
             get.return_value = self._response(self._schema(1201))
             assert searcher.initialize_collection() is True
         sizes = [
@@ -678,14 +678,14 @@ class TestInitializeCollectionRobustness:
         assert sizes == [500, 500, 201]
 
     def test_uses_configured_schema_timeout(self, searcher):
-        with patch("helpers.endpoint_searcher_chroma.requests.get") as get:
+        with patch("nautobot_mcp.helpers.endpoint_searcher_chroma.requests.get") as get:
             get.return_value = self._response(self._schema(1))
             searcher.initialize_collection()
         assert get.call_args.kwargs["timeout"] == 7
 
     def test_skips_reembedding_when_schema_unchanged(self, searcher):
         searcher.collection.count.return_value = 10
-        with patch("helpers.endpoint_searcher_chroma.requests.get") as get:
+        with patch("nautobot_mcp.helpers.endpoint_searcher_chroma.requests.get") as get:
             get.return_value = self._response(self._schema(3))
             assert searcher.initialize_collection() is True  # first run indexes
             assert searcher.collection.upsert.call_count == 1
@@ -696,7 +696,7 @@ class TestInitializeCollectionRobustness:
 
     def test_reindexes_when_schema_changes(self, searcher):
         searcher.collection.count.return_value = 10
-        with patch("helpers.endpoint_searcher_chroma.requests.get") as get:
+        with patch("nautobot_mcp.helpers.endpoint_searcher_chroma.requests.get") as get:
             get.return_value = self._response(self._schema(3), raw=b"v1")
             searcher.initialize_collection()
             get.return_value = self._response(self._schema(3), raw=b"v2")
@@ -705,7 +705,7 @@ class TestInitializeCollectionRobustness:
 
     def test_returns_false_when_nautobot_unreachable(self, searcher):
         with patch(
-            "helpers.endpoint_searcher_chroma.requests.get",
+            "nautobot_mcp.helpers.endpoint_searcher_chroma.requests.get",
             side_effect=requests.ConnectionError("down"),
         ):
             assert searcher.initialize_collection() is False

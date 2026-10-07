@@ -13,7 +13,7 @@ import os
 
 os.environ["SSL_VERIFY"] = "false"
 
-from utils.config import config
+from nautobot_mcp.utils.config import config
 
 
 def show_configuration():

@@ -39,7 +39,7 @@ def mock_env_vars():
 @pytest.mark.unit
 def test_parse_arguments_default():
     """Test argument parsing with defaults."""
-    from main import parse_arguments
+    from nautobot_mcp.main import parse_arguments
 
     with patch("sys.argv", ["main.py"]):
         args = parse_arguments()
@@ -50,7 +50,7 @@ def test_parse_arguments_default():
 @pytest.mark.unit
 def test_parse_arguments_host_default_and_env(mock_env_vars):
     """HTTP host defaults to loopback; MCP_HOST / --host override it."""
-    from main import parse_arguments
+    from nautobot_mcp.main import parse_arguments
 
     with patch.dict(os.environ, {"MCP_HOST": ""}):
         os.environ.pop("MCP_HOST")
@@ -66,7 +66,7 @@ def test_parse_arguments_host_default_and_env(mock_env_vars):
 @pytest.mark.unit
 def test_parse_arguments_stdio():
     """Test argument parsing for stdio mode."""
-    from main import parse_arguments
+    from nautobot_mcp.main import parse_arguments
 
     with patch("sys.argv", ["main.py", "--mode", "stdio"]):
         args = parse_arguments()
@@ -76,7 +76,7 @@ def test_parse_arguments_stdio():
 @pytest.mark.unit
 def test_parse_arguments_http():
     """Test argument parsing for HTTP mode."""
-    from main import parse_arguments
+    from nautobot_mcp.main import parse_arguments
 
     with patch("sys.argv", ["main.py", "--mode", "http", "--port", "9000"]):
         args = parse_arguments()
@@ -87,7 +87,7 @@ def test_parse_arguments_http():
 @pytest.mark.unit
 def test_parse_arguments_env_vars(mock_env_vars):
     """Test argument parsing with environment variables."""
-    from main import parse_arguments
+    from nautobot_mcp.main import parse_arguments
 
     mock_env_vars["MCP_TRANSPORT"] = "http"
     mock_env_vars["MCP_PORT"] = "9000"
@@ -102,7 +102,7 @@ def test_parse_arguments_env_vars(mock_env_vars):
 @pytest.mark.unit
 def test_parse_arguments_cli_overrides_env(mock_env_vars):
     """Test that CLI arguments override environment variables."""
-    from main import parse_arguments
+    from nautobot_mcp.main import parse_arguments
 
     mock_env_vars["MCP_TRANSPORT"] = "http"
     mock_env_vars["MCP_PORT"] = "9000"
@@ -117,7 +117,7 @@ def test_parse_arguments_cli_overrides_env(mock_env_vars):
 @pytest.mark.unit
 def test_imports():
     """Test that main.py can be imported without errors."""
-    import main
+    import nautobot_mcp.main as main
 
     assert hasattr(main, "main")
     assert hasattr(main, "parse_arguments")
@@ -130,7 +130,7 @@ def test_imports():
 @pytest.mark.unit
 def test_mode_choices():
     """Test that only valid modes are accepted."""
-    from main import parse_arguments
+    from nautobot_mcp.main import parse_arguments
 
     # Valid modes
     for mode in ["stdio", "http"]:
@@ -147,7 +147,7 @@ def test_mode_choices():
 @pytest.mark.unit
 def test_port_validation():
     """Test port number validation."""
-    from main import parse_arguments
+    from nautobot_mcp.main import parse_arguments
 
     # Valid port
     with patch("sys.argv", ["main.py", "--port", "8080"]):
@@ -182,7 +182,7 @@ def test_backward_compatibility_server_http_py():
 @pytest.mark.unit
 def test_help_message():
     """Test that help message is displayed correctly."""
-    from main import parse_arguments
+    from nautobot_mcp.main import parse_arguments
 
     with patch("sys.argv", ["main.py", "--help"]):
         with pytest.raises(SystemExit) as exc_info:

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, Optional
 
-from utils.config import config
+from nautobot_mcp.utils.config import config
 
 logger = logging.getLogger("nautobot_mcp")
 
@@ -29,6 +29,7 @@ class ComponentState(str, Enum):
     INITIALIZING = "initializing"
     READY = "ready"
     FAILED = "failed"
+    DISABLED = "disabled"
 
 
 @dataclass
@@ -51,16 +52,21 @@ class ComponentStatus:
 class ServerState:
     """Owns the heavy components and tracks their initialization progress."""
 
-    def __init__(self) -> None:
+    def __init__(self, enable_kb: bool = True) -> None:
         self.endpoint_searcher: Any = None
         self.nautobot_kb: Any = None
         self.status: Dict[str, ComponentStatus] = {
             ENDPOINT_INDEX: ComponentStatus(),
             KB_INDEX: ComponentStatus(),
         }
+        if not enable_kb:
+            self.status[KB_INDEX] = ComponentStatus(
+                state=ComponentState.DISABLED,
+                detail="disabled via NAUTOBOT_MCP_ENABLE_KB=false",
+            )
         self._tasks: list[asyncio.Task] = []
-        # Constructing a SentenceTransformer in two threads at once fails intermittently
-        # ("Cannot copy out of meta tensor"): torch's lazy module init is not thread-safe.
+        # Both workers build an embedding model, and the first build downloads it into
+        # the data dir; doing that from two threads at once races on the same files.
         # Serialize model loading only; the slow indexing phases still run in parallel.
         self._model_load_lock = threading.Lock()
 
@@ -70,9 +76,12 @@ class ServerState:
         if self._tasks:
             return
         self._tasks = [
-            asyncio.create_task(self._init_endpoint_index(), name="init-endpoints"),
-            asyncio.create_task(self._init_kb_index(), name="init-kb"),
+            asyncio.create_task(self._init_endpoint_index(), name="init-endpoints")
         ]
+        if self.status[KB_INDEX].state is not ComponentState.DISABLED:
+            self._tasks.append(
+                asyncio.create_task(self._init_kb_index(), name="init-kb")
+            )
 
     async def stop(self) -> None:
         for task in self._tasks:
@@ -84,7 +93,10 @@ class ServerState:
         return self.status[component].state is ComponentState.READY
 
     def snapshot(self) -> Dict[str, Any]:
-        ready = all(s.state is ComponentState.READY for s in self.status.values())
+        ready = all(
+            s.state in (ComponentState.READY, ComponentState.DISABLED)
+            for s in self.status.values()
+        )
         return {
             "ready": ready,
             "components": {name: s.to_dict() for name, s in self.status.items()},
@@ -95,6 +107,15 @@ class ServerState:
         if self.is_ready(component):
             return None
         status = self.status[component]
+        if status.state is ComponentState.DISABLED:
+            return json.dumps(
+                {
+                    "status": "disabled",
+                    "component": component,
+                    "message": f"The {component} is {status.detail}.",
+                },
+                indent=2,
+            )
         if status.state is ComponentState.FAILED:
             message = (
                 f"The {component} failed to initialize: {status.detail}. "
@@ -132,13 +153,13 @@ class ServerState:
 
     def _build_endpoint_searcher(self) -> Any:
         # Imported lazily: pulls in torch / sentence-transformers / chromadb.
-        from helpers.endpoint_searcher_chroma import EndpointSearcherChroma
+        from nautobot_mcp.helpers.endpoint_searcher_chroma import EndpointSearcherChroma
 
         with self._model_load_lock:
             return EndpointSearcherChroma()
 
     def _build_kb(self) -> Any:
-        from helpers.nb_kb_v2 import EnhancedNautobotKnowledge
+        from nautobot_mcp.helpers.nb_kb_v2 import EnhancedNautobotKnowledge
 
         with self._model_load_lock:
             return EnhancedNautobotKnowledge()

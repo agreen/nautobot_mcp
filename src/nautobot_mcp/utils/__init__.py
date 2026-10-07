@@ -1,7 +1,7 @@
 """Utility package.
 
-Exports are resolved lazily (PEP 562) so that importing a light submodule such as
-``utils.config`` does not pull in heavy dependencies (torch / sentence-transformers).
+Exports are resolved lazily (PEP 562) so importing a light submodule such as
+``nautobot_mcp.utils.config`` does not pull in heavy dependencies (chromadb, onnxruntime).
 Those imports used to run before the MCP ``initialize`` handshake could be answered.
 """
 
@@ -13,14 +13,17 @@ from typing import Any
 from .config import config
 
 _EXPORTS = {
-    "SentenceTransformerEmbeddingFunction": (
-        "utils.embedding",
-        "SentenceTransformerEmbeddingFunction",
+    "LocalEmbeddingFunction": (
+        "nautobot_mcp.utils.embedding",
+        "LocalEmbeddingFunction",
     ),
-    "get_chroma_db_path": ("utils.path", "get_chroma_db_path"),
-    "GitRepoManager": ("utils.git_manager", "GitRepoManager"),
-    "RepositoryConfig": ("utils.repo_config", "RepositoryConfig"),
-    "RepositoryConfigManager": ("utils.repo_config", "RepositoryConfigManager"),
+    "get_chroma_db_path": ("nautobot_mcp.utils.path", "get_chroma_db_path"),
+    "GitRepoManager": ("nautobot_mcp.utils.git_manager", "GitRepoManager"),
+    "RepositoryConfig": ("nautobot_mcp.utils.repo_config", "RepositoryConfig"),
+    "RepositoryConfigManager": (
+        "nautobot_mcp.utils.repo_config",
+        "RepositoryConfigManager",
+    ),
 }
 
 __all__ = ["config", *_EXPORTS]

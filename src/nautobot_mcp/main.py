@@ -9,13 +9,13 @@ need an index return a structured ``not_ready`` status until it is available.
 
 Usage:
     # stdio mode (default)
-    python main.py --mode stdio
+    nautobot-mcp --mode stdio
 
     # HTTP mode
-    python main.py --mode http --host 0.0.0.0 --port 8000
+    nautobot-mcp --mode http --host 0.0.0.0 --port 8000
 
     # Using environment variables
-    MCP_TRANSPORT=http MCP_HOST=0.0.0.0 MCP_PORT=8000 python main.py
+    MCP_TRANSPORT=http MCP_HOST=0.0.0.0 MCP_PORT=8000 nautobot-mcp
 """
 
 import argparse
@@ -28,8 +28,8 @@ from typing import Any, Dict, Optional
 
 import urllib3
 
-from helpers.startup import ENDPOINT_INDEX, KB_INDEX, ServerState
-from helpers.tool_handlers import (
+from nautobot_mcp.helpers.startup import ENDPOINT_INDEX, KB_INDEX, ServerState
+from nautobot_mcp.helpers.tool_handlers import (
     handle_add_repo,
     handle_api_request_schema,
     handle_dynamic_api_request,
@@ -41,7 +41,7 @@ from helpers.tool_handlers import (
     handle_repo_status,
     handle_update_repos,
 )
-from utils.config import config
+from nautobot_mcp.utils.config import config
 
 # Disable SSL warnings if SSL verification is disabled
 if not config.SSL_VERIFY:
@@ -72,7 +72,7 @@ async def run_stdio_mode():
     from mcp.server import NotificationOptions, Server
     from mcp.server.models import InitializationOptions
 
-    from helpers.tool_definitions import (
+    from nautobot_mcp.helpers.tool_definitions import (
         get_add_repo_description,
         get_add_repo_input_schema,
         get_api_request_schema_description,
@@ -94,7 +94,7 @@ async def run_stdio_mode():
         get_update_repos_description,
         get_update_repos_input_schema,
     )
-    from helpers.tool_handlers import (
+    from nautobot_mcp.helpers.tool_handlers import (
         handle_add_repo,
         handle_api_request_schema,
         handle_dynamic_api_request,
@@ -110,7 +110,7 @@ async def run_stdio_mode():
     logger.info("Starting MCP Server in stdio mode...")
 
     # Heavy components are built in the background; see ServerState.
-    state = ServerState()
+    state = ServerState(enable_kb=config.ENABLE_KB)
 
     server = Server(config.API_PREFIX)
 
@@ -129,7 +129,7 @@ async def run_stdio_mode():
 
     @server.list_tools()
     async def handle_list_tools() -> list[types.Tool]:
-        return [
+        tools = [
             # ---------------------------------------
             # ---------- NB API TOOLS ---------------
             # ---------------------------------------
@@ -190,6 +190,9 @@ async def run_stdio_mode():
                 inputSchema=get_repo_status_input_schema(),
             ),
         ]
+        if not config.ENABLE_KB:
+            tools = [t for t in tools if not t.name.startswith("nautobot_kb_")]
+        return tools
 
     @server.call_tool()
     async def handle_invoke_tool(
@@ -398,6 +401,18 @@ def build_http_app(state: ServerState):
             state.nautobot_kb
         )
 
+    if not config.ENABLE_KB:
+        for tool_name in (
+            "mcp_nautobot_kb_semantic_search",
+            "mcp_nautobot_kb_list_repos",
+            "mcp_nautobot_kb_add_repo",
+            "mcp_nautobot_kb_remove_repo",
+            "mcp_nautobot_kb_update_repos",
+            "mcp_nautobot_kb_init_repos",
+            "mcp_nautobot_kb_repo_status",
+        ):
+            mcp_app.remove_tool(tool_name)
+
     return mcp_app
 
 
@@ -420,7 +435,7 @@ async def run_http_mode(port: int = 8000, host: str = "127.0.0.1"):
         host: Interface to bind (default: 127.0.0.1; use 0.0.0.0 inside a container)
     """
     logger.info(f"Starting MCP Server in HTTP mode on {host}:{port}...")
-    state = ServerState()
+    state = ServerState(enable_kb=config.ENABLE_KB)
     await serve_http(build_http_app(state), state, host=host, port=port)
 
 
@@ -436,20 +451,20 @@ def parse_arguments() -> argparse.Namespace:
         epilog="""
 Examples:
   # Run in stdio mode (default)
-  python main.py
-  python main.py --mode stdio
+  nautobot-mcp
+  nautobot-mcp --mode stdio
 
   # Run in HTTP mode on default port (8000)
-  python main.py --mode http
+  nautobot-mcp --mode http
 
   # Bind all interfaces (containers)
-  python main.py --mode http --host 0.0.0.0
+  nautobot-mcp --mode http --host 0.0.0.0
 
   # Run in HTTP mode on custom port
-  python main.py --mode http --port 9000
+  nautobot-mcp --mode http --port 9000
 
   # Using environment variables
-  MCP_TRANSPORT=http MCP_PORT=8000 python main.py
+  MCP_TRANSPORT=http MCP_PORT=8000 nautobot-mcp
         """,
     )
 
@@ -476,6 +491,12 @@ Examples:
         )
 
     parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Check the Nautobot connection settings (URL, schema, token) and exit",
+    )
+
+    parser.add_argument(
         "--host",
         default=os.getenv("MCP_HOST", "127.0.0.1"),
         help="Interface to bind in HTTP mode (default: 127.0.0.1; env MCP_HOST)",
@@ -496,6 +517,11 @@ async def main():
     """Main entrypoint that dispatches to the appropriate transport mode."""
     args = parse_arguments()
 
+    if args.check:
+        from nautobot_mcp.utils import validate_config
+
+        sys.exit(validate_config.main())
+
     logger.info(f"Nautobot MCP Server v{config.SERVER_VERSION}")
     logger.info(f"Transport mode: {args.mode}")
 
@@ -514,5 +540,10 @@ async def main():
         sys.exit(1)
 
 
-if __name__ == "__main__":
+def cli() -> None:
+    """Console-script entry point (``nautobot-mcp`` / ``uvx nautobot-mcp``)."""
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    cli()

@@ -17,7 +17,7 @@ os.environ["SSL_VERIFY"] = "false"
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from utils.config import config  # noqa: E402
+from nautobot_mcp.utils.config import config  # noqa: E402
 
 
 def test_ssl_config():

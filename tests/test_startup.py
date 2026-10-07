@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from helpers.startup import (
+from nautobot_mcp.helpers.startup import (
     ENDPOINT_INDEX,
     KB_INDEX,
     ComponentState,
@@ -104,7 +104,7 @@ async def test_not_ready_response_until_ready_then_none():
 
 @pytest.mark.asyncio
 async def test_endpoint_init_retries_until_nautobot_is_reachable(monkeypatch):
-    monkeypatch.setattr("helpers.startup.asyncio.sleep", _fast_sleep)
+    monkeypatch.setattr("nautobot_mcp.helpers.startup.asyncio.sleep", _fast_sleep)
     searcher = FakeSearcher(results=(False, False, True), count=0)
     state = make_state(searcher)
     state.start()
@@ -121,7 +121,7 @@ async def test_endpoint_failed_state_reported_while_retrying(monkeypatch):
         gate.set()
         await asyncio.Event().wait()  # park forever; cancelled by stop()
 
-    monkeypatch.setattr("helpers.startup.asyncio.sleep", blocked_sleep)
+    monkeypatch.setattr("nautobot_mcp.helpers.startup.asyncio.sleep", blocked_sleep)
     state = make_state(FakeSearcher(results=(False,), count=0))
     state.start()
     await asyncio.wait_for(gate.wait(), 5)
@@ -195,9 +195,9 @@ def test_real_builders_hold_the_model_lock(monkeypatch):
             seen.append(state._model_load_lock.locked())
 
     monkeypatch.setattr(
-        "helpers.endpoint_searcher_chroma.EndpointSearcherChroma", Probe
+        "nautobot_mcp.helpers.endpoint_searcher_chroma.EndpointSearcherChroma", Probe
     )
-    monkeypatch.setattr("helpers.nb_kb_v2.EnhancedNautobotKnowledge", Probe)
+    monkeypatch.setattr("nautobot_mcp.helpers.nb_kb_v2.EnhancedNautobotKnowledge", Probe)
     state._build_endpoint_searcher()
     state._build_kb()
     assert seen == [True, True]
@@ -265,8 +265,8 @@ def test_utils_lazy_exports_resolve():
 
     assert utils.config.API_PREFIX
     assert callable(utils.get_chroma_db_path)
-    assert utils.SentenceTransformerEmbeddingFunction.__name__ == (
-        "SentenceTransformerEmbeddingFunction"
+    assert utils.LocalEmbeddingFunction.__name__ == (
+        "LocalEmbeddingFunction"
     )
     with pytest.raises(AttributeError):
         utils.does_not_exist
@@ -274,7 +274,7 @@ def test_utils_lazy_exports_resolve():
 
 @pytest.mark.unit
 def test_data_dir_override(tmp_path, monkeypatch):
-    from utils.path import get_chroma_db_path
+    from nautobot_mcp.utils.path import get_chroma_db_path
 
     monkeypatch.setenv("NAUTOBOT_MCP_DATA_DIR", str(tmp_path / "data"))
     assert get_chroma_db_path() == str(tmp_path / "data")
@@ -283,7 +283,7 @@ def test_data_dir_override(tmp_path, monkeypatch):
 
 @pytest.mark.unit
 def test_data_dir_default_does_not_require_checkout_named_nautobot_mcp(monkeypatch):
-    from utils.path import get_chroma_db_path
+    from nautobot_mcp.utils.path import get_chroma_db_path
 
     monkeypatch.delenv("NAUTOBOT_MCP_DATA_DIR", raising=False)
     assert get_chroma_db_path().endswith("backend/nautobot_mcp/db")
@@ -295,7 +295,7 @@ def test_data_dir_default_does_not_require_checkout_named_nautobot_mcp(monkeypat
 async def test_http_health_and_ready_endpoints():
     import httpx
 
-    from main import build_http_app
+    from nautobot_mcp.main import build_http_app
 
     state = ServerState()
     app = build_http_app(state).http_app()
@@ -318,7 +318,7 @@ async def test_http_health_and_ready_endpoints():
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_http_tools_return_not_ready_before_index_is_built():
-    from main import build_http_app
+    from nautobot_mcp.main import build_http_app
 
     state = ServerState()
     app = build_http_app(state)

@@ -6,15 +6,14 @@ for the knowledge base system.
 
 import json
 import logging
-import os
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import requests
 
-from utils.config import config
+from nautobot_mcp.utils.config import config
+from nautobot_mcp.utils.path import get_repo_cache_dir
 
 logger = logging.getLogger(__name__)
 
@@ -26,14 +25,10 @@ class GitRepoManager:
         """Initialize the Git repository manager.
 
         Args:
-            cache_dir: Directory to store cloned repositories. If None, uses the
-                ``NAUTOBOT_MCP_REPO_CACHE`` env var, else a temp directory. Point the env
-                var at a persistent volume so restarts don't re-clone and re-index.
+            cache_dir: Directory to store cloned repositories. Defaults to
+                ``<data dir>/repos`` (see ``nautobot_mcp.utils.path``).
         """
-        default_dir = os.getenv("NAUTOBOT_MCP_REPO_CACHE") or str(
-            Path(tempfile.gettempdir()) / "nautobot_mcp_repos"
-        )
-        self.cache_dir = Path(cache_dir) if cache_dir else Path(default_dir)
+        self.cache_dir = Path(cache_dir) if cache_dir else Path(get_repo_cache_dir())
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.metadata_file = self.cache_dir / "repo_metadata.json"
         self.metadata = self._load_metadata()

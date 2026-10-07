@@ -13,7 +13,6 @@ import re
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
 
@@ -21,28 +20,21 @@ logger = logging.getLogger(__name__)
 class ContentProcessor:
     """Intelligent content processor for search results."""
 
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(self, embedding_function=None):
         """Initialize the content processor.
 
         Args:
-            model_name: Name of the sentence transformer model to use
+            embedding_function: Callable mapping a list of strings to embeddings. Defaults
+                to the shared local ONNX MiniLM model.
         """
-        # Use local model cache only - no internet access
-        import os
-        from pathlib import Path
+        if embedding_function is None:
+            from nautobot_mcp.utils.embedding import LocalEmbeddingFunction
 
-        # Set environment variables to force offline mode
-        os.environ["TRANSFORMERS_OFFLINE"] = "1"
-        os.environ["HF_HUB_OFFLINE"] = "1"
+            embedding_function = LocalEmbeddingFunction()
+        self.embedding_function = embedding_function
 
-        # Use the existing model cache location - go up one level from helpers to root, then to backend/models
-        model_cache_dir = str(Path(__file__).parent.parent / "backend" / "models")
-
-        # Initialize with local_files_only to prevent internet access
-        self.model = SentenceTransformer(
-            model_name, cache_folder=model_cache_dir, local_files_only=True
-        )
-        self.model_name = model_name
+    def _encode(self, texts):
+        return np.asarray(self.embedding_function(texts))
 
     def extract_query_relevant_content(
         self, document: str, query: str, max_chars: int = 500, min_sentences: int = 2
@@ -65,8 +57,8 @@ class ContentProcessor:
                 return document[:max_chars]
 
             # Encode query and sentences
-            query_embedding = self.model.encode([query])
-            sentence_embeddings = self.model.encode(sentences)
+            query_embedding = self._encode([query])
+            sentence_embeddings = self._encode(sentences)
 
             # Calculate similarity scores
             similarities = np.dot(sentence_embeddings, query_embedding.T).flatten()
@@ -197,9 +189,9 @@ class ContentProcessor:
 class HybridContentProcessor(ContentProcessor):
     """Hybrid content processor that combines multiple intelligent processing strategies."""
 
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(self, embedding_function=None):
         """Initialize the hybrid content processor."""
-        super().__init__(model_name)
+        super().__init__(embedding_function)
 
         # File type patterns for different processing strategies
         self.code_extensions = {

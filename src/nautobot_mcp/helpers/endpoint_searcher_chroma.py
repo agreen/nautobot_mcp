@@ -8,7 +8,7 @@ import urllib3
 from chromadb import PersistentClient
 from chromadb.config import Settings
 
-from utils import SentenceTransformerEmbeddingFunction, config, get_chroma_db_path
+from nautobot_mcp.utils import LocalEmbeddingFunction, config, get_chroma_db_path
 
 # Disable SSL warnings if SSL verification is disabled
 if not config.SSL_VERIFY:
@@ -23,25 +23,15 @@ class EndpointSearcherChroma:
     def __init__(self) -> None:
         self.base_url: str = config.GLOBAL_TOOL_PROMPT
         self.token: str = config.NAUTOBOT_TOKEN
-        self.model_name: str = config.EMBEDDING_MODEL
         self.db_path: str = str(Path(get_chroma_db_path()) / "nautobot_api" / "db")
-
-        # Use the existing model cache location - go up one level from helpers to root, then to backend/models
-        self.model_cache_dir: str = str(
-            Path(__file__).parent.parent / "backend" / "models"
-        )
 
         # Setup Chroma client
         self.client = PersistentClient(
             path=self.db_path, settings=Settings(anonymized_telemetry=False)
         )
 
-        # Get Model from local cache only.
-        self.embedding_function = SentenceTransformerEmbeddingFunction(
-            model_name=self.model_name,
-            cache_dir=self.model_cache_dir,
-            local_files_only=True,
-        )
+        # Local ONNX embedding model (downloaded on first use into the data dir)
+        self.embedding_function = LocalEmbeddingFunction()
 
         self.collection = self.client.get_or_create_collection(
             name="endpoint_collection", embedding_function=self.embedding_function

@@ -16,8 +16,8 @@ import pytest
 # Add the parent directory to Python path to enable imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from helpers.nb_kb_v2 import EnhancedNautobotKnowledge
-from utils.repo_config import RepositoryConfig
+from nautobot_mcp.helpers.nb_kb_v2 import EnhancedNautobotKnowledge
+from nautobot_mcp.utils.repo_config import RepositoryConfig
 
 
 class TestEnhancedNautobotKnowledge:
@@ -41,10 +41,10 @@ class TestEnhancedNautobotKnowledge:
         config_dir, cache_dir = temp_dirs
 
         with (
-            patch("helpers.nb_kb_v2.RepositoryConfigManager"),
-            patch("helpers.nb_kb_v2.GitRepoManager"),
-            patch("helpers.nb_kb_v2.HybridContentProcessor"),
-            patch("helpers.nb_kb_v2.SentenceTransformerEmbeddingFunction"),
+            patch("nautobot_mcp.helpers.nb_kb_v2.RepositoryConfigManager"),
+            patch("nautobot_mcp.helpers.nb_kb_v2.GitRepoManager"),
+            patch("nautobot_mcp.helpers.nb_kb_v2.HybridContentProcessor"),
+            patch("nautobot_mcp.helpers.nb_kb_v2.LocalEmbeddingFunction"),
         ):
             kb = EnhancedNautobotKnowledge(config_dir=config_dir, cache_dir=cache_dir)
             return kb
@@ -66,10 +66,10 @@ class TestEnhancedNautobotKnowledge:
         config_dir, cache_dir = temp_dirs
 
         with (
-            patch("helpers.nb_kb_v2.RepositoryConfigManager"),
-            patch("helpers.nb_kb_v2.GitRepoManager"),
-            patch("helpers.nb_kb_v2.HybridContentProcessor"),
-            patch("helpers.nb_kb_v2.SentenceTransformerEmbeddingFunction"),
+            patch("nautobot_mcp.helpers.nb_kb_v2.RepositoryConfigManager"),
+            patch("nautobot_mcp.helpers.nb_kb_v2.GitRepoManager"),
+            patch("nautobot_mcp.helpers.nb_kb_v2.HybridContentProcessor"),
+            patch("nautobot_mcp.helpers.nb_kb_v2.LocalEmbeddingFunction"),
         ):
             kb = EnhancedNautobotKnowledge(config_dir=config_dir, cache_dir=cache_dir)
 
@@ -121,7 +121,7 @@ class TestEnhancedNautobotKnowledge:
         assert "dict_list" in cleaned
         # Complex objects should be filtered out or converted
 
-    @patch("helpers.nb_kb_v2.os.walk")
+    @patch("nautobot_mcp.helpers.nb_kb_v2.os.walk")
     @patch("builtins.open")
     def test_index_repository_files(
         self, mock_open, mock_walk, mock_kb, sample_repo_config

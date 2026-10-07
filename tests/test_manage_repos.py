@@ -17,8 +17,8 @@ import pytest
 # Add the parent directory to Python path to enable imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from helpers import manage_repos
-from utils.repo_config import RepositoryConfig, RepositoryConfigManager
+from nautobot_mcp.helpers import manage_repos
+from nautobot_mcp.utils.repo_config import RepositoryConfig, RepositoryConfigManager
 
 
 class TestManageRepos:
@@ -45,7 +45,7 @@ class TestManageRepos:
     @pytest.fixture
     def mock_kb(self):
         """Create a mocked EnhancedNautobotKnowledge instance."""
-        with patch("helpers.manage_repos.EnhancedNautobotKnowledge") as mock_kb_class:
+        with patch("nautobot_mcp.helpers.manage_repos.EnhancedNautobotKnowledge") as mock_kb_class:
             mock_kb = Mock()
             mock_kb_class.return_value = mock_kb
             return mock_kb
@@ -200,7 +200,7 @@ class TestManageRepos:
         mock_kb.update_repository.return_value = True
 
         with patch(
-            "helpers.manage_repos.RepositoryConfigManager",
+            "nautobot_mcp.helpers.manage_repos.RepositoryConfigManager",
             return_value=mock_config_manager,
         ):
             manage_repos.update_repositories(mock_kb, repo="test/repo", force=False)
@@ -216,7 +216,7 @@ class TestManageRepos:
         mock_config_manager.get_repo_config.return_value = None
 
         with patch(
-            "helpers.manage_repos.RepositoryConfigManager",
+            "nautobot_mcp.helpers.manage_repos.RepositoryConfigManager",
             return_value=mock_config_manager,
         ):
             manage_repos.update_repositories(
@@ -236,7 +236,7 @@ class TestManageRepos:
         mock_kb.update_repository.return_value = False
 
         with patch(
-            "helpers.manage_repos.RepositoryConfigManager",
+            "nautobot_mcp.helpers.manage_repos.RepositoryConfigManager",
             return_value=mock_config_manager,
         ):
             manage_repos.update_repositories(mock_kb, repo="test/repo", force=False)
@@ -313,7 +313,7 @@ class TestManageRepos:
         mock_kb.get_repository_stats.return_value = mock_stats
 
         with patch(
-            "helpers.manage_repos.RepositoryConfigManager",
+            "nautobot_mcp.helpers.manage_repos.RepositoryConfigManager",
             return_value=mock_config_manager,
         ):
             manage_repos.show_status(mock_kb)
@@ -347,9 +347,9 @@ class TestManageRepos:
 
         with (
             patch("sys.argv", test_args),
-            patch(f"helpers.manage_repos.{expected_function}") as mock_func,
-            patch("helpers.manage_repos.RepositoryConfigManager"),
-            patch("helpers.manage_repos.EnhancedNautobotKnowledge"),
+            patch(f"nautobot_mcp.helpers.manage_repos.{expected_function}") as mock_func,
+            patch("nautobot_mcp.helpers.manage_repos.RepositoryConfigManager"),
+            patch("nautobot_mcp.helpers.manage_repos.EnhancedNautobotKnowledge"),
         ):
             manage_repos.main()
             mock_func.assert_called_once()
@@ -368,9 +368,9 @@ class TestManageRepos:
 
         with (
             patch("sys.argv", test_args),
-            patch("helpers.manage_repos.list_repositories") as mock_list,
-            patch("helpers.manage_repos.RepositoryConfigManager") as mock_config,
-            patch("helpers.manage_repos.EnhancedNautobotKnowledge"),
+            patch("nautobot_mcp.helpers.manage_repos.list_repositories") as mock_list,
+            patch("nautobot_mcp.helpers.manage_repos.RepositoryConfigManager") as mock_config,
+            patch("nautobot_mcp.helpers.manage_repos.EnhancedNautobotKnowledge"),
         ):
             manage_repos.main()
             mock_list.assert_called_once_with(mock_config.return_value, "user")
@@ -389,9 +389,9 @@ class TestManageRepos:
 
         with (
             patch("sys.argv", test_args),
-            patch("helpers.manage_repos.add_repository") as mock_add,
-            patch("helpers.manage_repos.RepositoryConfigManager") as mock_config,
-            patch("helpers.manage_repos.EnhancedNautobotKnowledge"),
+            patch("nautobot_mcp.helpers.manage_repos.add_repository") as mock_add,
+            patch("nautobot_mcp.helpers.manage_repos.RepositoryConfigManager") as mock_config,
+            patch("nautobot_mcp.helpers.manage_repos.EnhancedNautobotKnowledge"),
         ):
             manage_repos.main()
             mock_add.assert_called_once_with(
@@ -404,9 +404,9 @@ class TestManageRepos:
 
         with (
             patch("sys.argv", test_args),
-            patch("helpers.manage_repos.update_repositories") as mock_update,
-            patch("helpers.manage_repos.RepositoryConfigManager"),
-            patch("helpers.manage_repos.EnhancedNautobotKnowledge") as mock_kb_class,
+            patch("nautobot_mcp.helpers.manage_repos.update_repositories") as mock_update,
+            patch("nautobot_mcp.helpers.manage_repos.RepositoryConfigManager"),
+            patch("nautobot_mcp.helpers.manage_repos.EnhancedNautobotKnowledge") as mock_kb_class,
         ):
             manage_repos.main()
             mock_update.assert_called_once_with(
@@ -419,9 +419,9 @@ class TestManageRepos:
 
         with (
             patch("sys.argv", test_args),
-            patch("helpers.manage_repos.initialize_repositories") as mock_init,
-            patch("helpers.manage_repos.RepositoryConfigManager"),
-            patch("helpers.manage_repos.EnhancedNautobotKnowledge") as mock_kb_class,
+            patch("nautobot_mcp.helpers.manage_repos.initialize_repositories") as mock_init,
+            patch("nautobot_mcp.helpers.manage_repos.RepositoryConfigManager"),
+            patch("nautobot_mcp.helpers.manage_repos.EnhancedNautobotKnowledge") as mock_kb_class,
         ):
             manage_repos.main()
             mock_init.assert_called_once_with(mock_kb_class.return_value, True)
@@ -431,7 +431,7 @@ class TestManageRepos:
         with (
             patch("sys.argv", ["manage_repos.py", "list"]),
             patch(
-                "helpers.manage_repos.RepositoryConfigManager",
+                "nautobot_mcp.helpers.manage_repos.RepositoryConfigManager",
                 side_effect=Exception("Test error"),
             ),
         ):
@@ -496,8 +496,8 @@ class TestManageRepos:
 
         # This would require actual implementations, so we'll mock the dependencies
         with (
-            patch("helpers.manage_repos.RepositoryConfigManager") as mock_config_class,
-            patch("helpers.manage_repos.EnhancedNautobotKnowledge") as mock_kb_class,
+            patch("nautobot_mcp.helpers.manage_repos.RepositoryConfigManager") as mock_config_class,
+            patch("nautobot_mcp.helpers.manage_repos.EnhancedNautobotKnowledge") as mock_kb_class,
         ):
             mock_config = Mock()
             mock_config_class.return_value = mock_config

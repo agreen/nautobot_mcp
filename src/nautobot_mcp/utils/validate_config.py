@@ -12,7 +12,7 @@ from typing import List, Tuple
 import requests
 import urllib3
 
-from utils.config import config
+from nautobot_mcp.utils.config import config
 
 # Disable SSL warnings if SSL verification is disabled
 if not config.SSL_VERIFY:
@@ -144,7 +144,7 @@ def main():
     if all_passed:
         print("🎉 All critical tests passed! Your configuration looks good.")
         print("\nTo start the MCP server:")
-        print("  uv run python server.py")
+        print("  nautobot-mcp")
     else:
         print("❌ Some tests failed. Please check your configuration.")
         print("\nNext steps:")

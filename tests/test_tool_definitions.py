@@ -5,7 +5,7 @@ Unit tests for tool_definitions.py
 
 import pytest
 
-from helpers.tool_definitions import (
+from nautobot_mcp.helpers.tool_definitions import (
     get_add_repo_description,
     get_add_repo_input_schema,
     get_api_request_schema_description,

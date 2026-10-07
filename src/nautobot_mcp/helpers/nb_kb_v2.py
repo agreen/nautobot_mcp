@@ -17,10 +17,10 @@ from typing import Dict, List, Optional
 from chromadb import PersistentClient
 from chromadb.config import Settings
 
-from helpers.content_processor import HybridContentProcessor
-from utils import SentenceTransformerEmbeddingFunction, config, get_chroma_db_path
-from utils.git_manager import GitRepoManager
-from utils.repo_config import RepositoryConfig, RepositoryConfigManager
+from nautobot_mcp.helpers.content_processor import HybridContentProcessor
+from nautobot_mcp.utils import LocalEmbeddingFunction, config, get_chroma_db_path
+from nautobot_mcp.utils.git_manager import GitRepoManager
+from nautobot_mcp.utils.repo_config import RepositoryConfig, RepositoryConfigManager
 
 # Configure logging
 logger = logging.getLogger("nautobot_knowledge_v2")
@@ -39,33 +39,15 @@ class EnhancedNautobotKnowledge:
             config_dir: Directory containing repository configuration files
             cache_dir: Directory for caching cloned repositories
         """
-        # Set environment variables to force offline mode
-        import os
-
-        os.environ["TRANSFORMERS_OFFLINE"] = "1"
-        os.environ["HF_HUB_OFFLINE"] = "1"
-
-        self.model_name: str = config.EMBEDDING_MODEL
         self.db_base_path: str = str(Path(get_chroma_db_path()) / "nautobot_kb_v2")
-
-        # Use the existing model cache location - go up one level from helpers to root, then to backend/models
-        self.model_cache_dir: str = str(
-            Path(__file__).parent.parent / "backend" / "models"
-        )
 
         # Initialize managers
         self.repo_config_manager = RepositoryConfigManager(config_dir)
         self.git_manager = GitRepoManager(cache_dir)
 
-        # Initialize intelligent content processor
-        self.content_processor = HybridContentProcessor(self.model_name)
-
-        # Setup embedding function
-        self.embedding_function = SentenceTransformerEmbeddingFunction(
-            model_name=self.model_name,
-            cache_dir=self.model_cache_dir,
-            local_files_only=True,
-        )
+        # One embedding model instance shared by the vector stores and the content processor
+        self.embedding_function = LocalEmbeddingFunction()
+        self.content_processor = HybridContentProcessor(self.embedding_function)
 
         # Dictionary to hold per-repository ChromaDB clients and collections
         self.repo_clients = {}

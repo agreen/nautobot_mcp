@@ -12,8 +12,8 @@ import argparse
 import sys
 from typing import Optional
 
-from helpers.nb_kb_v2 import EnhancedNautobotKnowledge
-from utils.repo_config import RepositoryConfig, RepositoryConfigManager
+from nautobot_mcp.helpers.nb_kb_v2 import EnhancedNautobotKnowledge
+from nautobot_mcp.utils.repo_config import RepositoryConfig, RepositoryConfigManager
 
 
 def list_repositories(config_manager: RepositoryConfigManager, repo_type: str):

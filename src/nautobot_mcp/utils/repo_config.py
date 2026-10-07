@@ -9,6 +9,10 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from nautobot_mcp.utils.path import get_data_dir
+
+from nautobot_mcp.utils.path import get_data_dir
+
 logger = logging.getLogger(__name__)
 
 
@@ -65,14 +69,17 @@ class RepositoryConfigManager:
             config_dir: Directory containing configuration files
         """
         if config_dir:
+            # Explicit directory: both files live there (used by tests / custom setups)
             self.config_dir = Path(config_dir)
+            self.config_dir.mkdir(parents=True, exist_ok=True)
+            self.repos_file = self.config_dir / "repositories.json"
+            self.user_repos_file = self.config_dir / "user_repositories.json"
         else:
-            # Default to config directory in project root
-            self.config_dir = Path(__file__).parent.parent / "config"
-
-        self.config_dir.mkdir(parents=True, exist_ok=True)
-        self.repos_file = self.config_dir / "repositories.json"
-        self.user_repos_file = self.config_dir / "user_repositories.json"
+            # Default repo list ships inside the package (read-only); repositories added
+            # via the MCP tools are stored in the writable data directory.
+            self.config_dir = Path(__file__).resolve().parent.parent / "config"
+            self.repos_file = self.config_dir / "repositories.json"
+            self.user_repos_file = get_data_dir() / "user_repositories.json"
 
     def load_repositories(self) -> List[RepositoryConfig]:
         """Load all repository configurations.

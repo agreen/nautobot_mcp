@@ -10,12 +10,12 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import requests
 
-from utils.config import config
-from utils.repo_config import RepositoryConfig, RepositoryConfigManager
+from nautobot_mcp.utils.config import config
+from nautobot_mcp.utils.repo_config import RepositoryConfig, RepositoryConfigManager
 
 if TYPE_CHECKING:  # heavy modules (torch) - never import them at server startup
-    from helpers.endpoint_searcher_chroma import EndpointSearcherChroma
-    from helpers.nb_kb_v2 import EnhancedNautobotKnowledge
+    from nautobot_mcp.helpers.endpoint_searcher_chroma import EndpointSearcherChroma
+    from nautobot_mcp.helpers.nb_kb_v2 import EnhancedNautobotKnowledge
 
 logger = logging.getLogger("nautobot_mcp")
 

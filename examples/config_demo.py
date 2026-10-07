@@ -8,8 +8,8 @@ automatically switches all related configuration settings.
 
 import os
 
-from helpers.creds_helper import NautobotEnv
-from utils.config import Config
+from nautobot_mcp.helpers.creds_helper import NautobotEnv
+from nautobot_mcp.utils.config import Config
 
 
 def demonstrate_config_switching():
@@ -34,10 +34,10 @@ def demonstrate_config_switching():
         # For demo purposes, we'll create a new Config instance
         from importlib import reload
 
-        import utils.config as config_module
+        import nautobot_mcp.utils.config as config_module
 
         reload(config_module)
-        from utils.config import Config as ReloadedConfig
+        from nautobot_mcp.utils.config import Config as ReloadedConfig
 
         print(f"📍 Environment: {env.value.upper()}")
         print(f"   Base URL: {ReloadedConfig.NAUTOBOT_BASE_URL}")
