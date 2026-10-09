@@ -15,135 +15,91 @@ The Nautobot MCP Server provides a comprehensive set of tools for interacting wi
 
 ### `nautobot_openapi_api_request_schema`
 
-Search for relevant Nautobot API endpoints using natural language queries.
+Find Nautobot API endpoints by meaning, using the embedding index of the instance's OpenAPI schema.
 
-**Purpose:** Discover API endpoints when you don't know the exact path or want to find similar endpoints.
+**Purpose:** Discover the right endpoint, its filters and (for writes) its body fields. The assistant
+should always call this before `nautobot_dynamic_api_request` instead of guessing paths.
 
 #### Parameters
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `query` | string | Yes | Natural language description of desired endpoint |
-| `n_results` | integer | No | Number of results to return (default: 5) |
+| `query` | string | Yes | What you want to do, in plain language (e.g. "create a new device") |
+| `n_results` | integer | No | Number of matching endpoints to return (default: 5) |
 
-#### Example Usage
+#### Response
 
-**Query:**
-```
-Find endpoints for managing devices
-```
+Each match is compact and ready to use. Paths are relative to `/api`; request bodies are resolved from
+the schema's definitions (required fields first, read-only fields omitted); GET filters are listed
+(capped, with a count of the rest):
 
-**Response:**
 ```json
 {
-  "results": [
-    {
-      "method": "GET",
-      "path": "/api/dcim/devices/",
-      "description": "List all devices",
-      "similarity_score": 0.89
-    },
+  "matching_endpoints": [
     {
       "method": "POST",
-      "path": "/api/dcim/devices/",
-      "description": "Create a new device",
-      "similarity_score": 0.87
-    },
-    {
-      "method": "GET",
-      "path": "/api/dcim/devices/{id}/",
-      "description": "Retrieve a specific device",
-      "similarity_score": 0.85
+      "path": "/dcim/devices/",
+      "description": "Create a new device.",
+      "operation_id": "dcim_devices_create",
+      "body_fields": [
+        "device_type (string, required): Device type (UUID)",
+        "location (string, required): Location (UUID)",
+        "name (string, required): Device name",
+        "role (string, required): Role (UUID)",
+        "status (string, required): Status (UUID or name)",
+        "serial (string)",
+        "tags (array of string)"
+      ]
     }
-  ]
+  ],
+  "how_to_call": "Use nautobot_dynamic_api_request with the method and path shown (relative to /api). ...",
+  "schema_url": "https://nautobot.example.com/api/swagger.json"
 }
 ```
 
-#### Use Cases
-
-- 🔍 **API Discovery:** "What endpoints exist for IP address management?"
-- 📝 **Learning:** "How do I create a new location?"
-- 🔄 **Migration:** "Find all endpoints related to interfaces"
+GET endpoints carry `query_parameters` instead (`limit`, `offset`, `q`, ... then the rest, with
+"... N more filters" when capped), and detail endpoints carry `path_parameters` (`["id"]`, the UUID).
+When nothing matches, the response suggests browsing with the `nautobot://api/endpoints/{app}` resource.
 
 ---
 
 ### `nautobot_dynamic_api_request`
 
-Execute HTTP requests against any Nautobot API endpoint.
-
-**Purpose:** Perform CRUD operations on Nautobot resources with full control over request parameters.
+Execute a request against any Nautobot REST API endpoint.
 
 #### Parameters
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `method` | string | Yes | HTTP method: GET, POST, PUT, PATCH, DELETE |
-| `path` | string | Yes | API endpoint path (e.g., `/api/dcim/devices/`) |
-| `params` | object | No | URL query parameters (used with GET/DELETE) |
-| `body` | object | No | Request body (used with POST/PUT/PATCH) |
+| `method` | string | Yes | GET, POST, PUT, PATCH or DELETE |
+| `path` | string | Yes | Path relative to `/api`, with a trailing slash (e.g. `/dcim/devices/`). A leading `/api` is tolerated |
+| `params` | object | No | Query parameters (filters, `limit`, `offset`, `depth`) |
+| `body` | object | No | JSON body for POST/PUT/PATCH |
 
-#### Example Usage
+#### Behavior
 
-**Example 1: GET Request**
-
-```json
-{
-  "method": "GET",
-  "path": "/api/dcim/devices/",
-  "params": {
-    "status": "active",
-    "limit": 10
-  }
-}
-```
-
-**Example 2: POST Request**
+- **`depth`:** GET requests get a default `depth` (`NAUTOBOT_MCP_DEFAULT_DEPTH`, default 2) so related
+  objects are expanded. Pass `depth` in `params` to override; a negative setting omits it entirely.
+- **Paging:** list results that have more pages carry an `_mcp_hint` saying which `offset` to use next.
+- **Size cap:** responses are limited to `NAUTOBOT_MCP_MAX_RESPONSE_CHARS` characters. Over-long lists are
+  trimmed to fit and say so in `_mcp_hint`.
+- **Errors are results, not exceptions.** A non-2xx response, a timeout, a TLS problem or an unreachable
+  host comes back as JSON with Nautobot's own error detail and a hint on how to fix the request:
 
 ```json
 {
-  "method": "POST",
-  "path": "/api/dcim/devices/",
-  "body": {
-    "name": "switch-01",
-    "device_type": "cisco-catalyst-3850",
-    "site": "main-dc",
-    "status": "active"
-  }
+  "error": true,
+  "status": 400,
+  "message": "POST /dcim/devices/ failed: HTTP 400 Bad Request",
+  "hint": "The request was rejected as invalid. The detail names the offending fields ...",
+  "detail": { "device_type": ["This field is required."], "role": ["This field is required."] }
 }
 ```
 
-**Example 3: PATCH Request**
+- A successful DELETE returns `{"status": 204, "result": "success (no content returned)"}`.
 
-```json
-{
-  "method": "PATCH",
-  "path": "/api/dcim/devices/12345/",
-  "body": {
-    "status": "offline"
-  }
-}
-```
-
-#### Response Format
-
-```json
-{
-  "status": 200,
-  "data": {
-    "id": "12345",
-    "name": "switch-01",
-    "status": "active"
-  },
-  "count": 1
-}
-```
-
-#### Use Cases
-
-- 📊 **Data Retrieval:** "Get all devices in Main DC"
-- ✏️ **Create Resources:** "Create a new IP address"
-- 🔄 **Updates:** "Change device status to maintenance"
-- 🗑️ **Deletion:** "Remove outdated location"
+The tool description tells the assistant to confirm with the user before any POST/PUT/PATCH/DELETE; the
+`nautobot_safe_change` prompt turns that into a preview-confirm-apply-verify workflow.
 
 ---
 

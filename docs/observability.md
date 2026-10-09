@@ -54,16 +54,30 @@ schema skips re-embedding and is ready in seconds.
 
 ## Resources and prompts
 
-**Resources** (read-only context): `nautobot://server/status`, `nautobot://server/startup-log`, and,
-when the knowledge base is enabled, `nautobot://kb/repositories`.
+**Resources** (read-only context a client or user can attach):
+
+| URI | Contents |
+|---|---|
+| `nautobot://api/overview` | The connected instance: Nautobot/Python/Django versions and installed plugins (from `/api/status/`), plus every API app with its resources and operation counts (from the indexed schema). Tells the assistant what *this* Nautobot supports. |
+| `nautobot://api/endpoints/{app}` | Every endpoint of one app (`dcim`, `ipam`, `extras`, ...) with its supported HTTP methods; a way to browse when the semantic search misses. An unknown app lists the valid ones. |
+| `nautobot://guide/api-conventions` | Paging, filtering and lookup suffixes, `depth`, UUIDs, how to write safely, and how to read errors |
+| `nautobot://server/status`, `nautobot://server/startup-log` | The server's own health and warm-up history |
+| `nautobot://kb/repositories` | Knowledge-base repositories (knowledge base enabled only) |
 
 **Prompts** (user-invoked workflow templates, shown as slash commands in many clients):
 
 | Prompt | Purpose |
 |---|---|
-| `query_nautobot(task)` | Look something up or change something using the schema-search → API-request workflow, confirming writes first |
-| `diagnose_nautobot_mcp()` | Have the assistant read the server status and explain what is slow, not ready, or failing |
+| `query_nautobot(task)` | Look something up or change something with the search → request workflow, confirming writes first |
+| `nautobot_inventory_report(scope)` | Read-only inventory summary with counts first and modest paging |
+| `nautobot_ip_lookup(address)` | Everything Nautobot knows about an IP or prefix |
+| `nautobot_safe_change(change)` | Preview the exact requests and before/after, wait for explicit confirmation, apply, then verify |
+| `diagnose_nautobot_mcp()` | Have the assistant read the server status and explain what is slow or failing |
 | `nautobot_job_example(goal)` | Find examples with the knowledge base and write a Nautobot Job (knowledge base enabled only) |
+
+Whether a client shows resources and prompts to the model is up to the client, so nothing depends on
+them: the essential rules are also in the tool descriptions, the server `instructions`, and the tool
+results themselves (search results say how to call each endpoint; API errors say how to fix the request).
 
 **Not implemented, on purpose:** *roots* (the server never touches the client's files) and *sampling*
 (the server never needs to ask the client's model to generate text).

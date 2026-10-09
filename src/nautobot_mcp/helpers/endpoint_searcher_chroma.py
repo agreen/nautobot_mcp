@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import shutil
 from pathlib import Path
@@ -18,6 +19,45 @@ if not config.SSL_VERIFY:
 # Configure logging
 logger = logging.getLogger("endpoint_searcher_chroma")
 logger.setLevel(logging.INFO)
+
+
+# Bump when the stored metadata changes shape so existing indexes are rebuilt
+_INDEX_FORMAT = 2
+_MAX_BODY_FIELDS = 80
+
+
+def _body_fields(operation: dict, definitions: dict) -> list:
+    """Writable request-body fields of an operation, resolved from the schema definitions."""
+    for param in operation.get("parameters", []):
+        if param.get("in") != "body":
+            continue
+        ref = (param.get("schema") or {}).get("$ref")
+        if not ref:
+            return []
+        definition = definitions.get(ref.rsplit("/", 1)[-1]) or {}
+        required = set(definition.get("required") or [])
+        fields = []
+        for name, spec in (definition.get("properties") or {}).items():
+            if spec.get("readOnly"):
+                continue
+            ftype = spec.get("type") or ("object" if "$ref" in spec else None)
+            if ftype == "array":
+                ftype = f"array of {(spec.get('items') or {}).get('type') or 'object'}"
+            description = " ".join(
+                str(spec.get("description") or spec.get("title") or "").split()
+            )
+            fields.append(
+                {
+                    "name": name,
+                    "type": ftype,
+                    "required": name in required,
+                    "enum": spec.get("enum"),
+                    "description": description[:100],
+                }
+            )
+        fields.sort(key=lambda f: (not f["required"], f["name"]))
+        return fields[:_MAX_BODY_FIELDS]
+    return []
 
 
 class EndpointSearcherChroma:
@@ -113,7 +153,9 @@ class EndpointSearcherChroma:
             data = response.json()
             logger.info("Fetched Swagger/OpenAPI schema.")
 
-            schema_hash = hashlib.sha256(response.content).hexdigest()
+            schema_hash = hashlib.sha256(
+                response.content + f"|index-format-{_INDEX_FORMAT}".encode()
+            ).hexdigest()
             if not force and self._schema_unchanged(schema_hash):
                 logger.info(
                     "Schema unchanged since last index; skipping re-embedding "
@@ -124,8 +166,11 @@ class EndpointSearcherChroma:
             documents = []
             metadatas = []
             ids = []
+            definitions = data.get("definitions", {})
             for path, methods in data.get("paths", {}).items():
                 for method, operation in methods.items():
+                    if not isinstance(operation, dict):  # e.g. path-level "parameters"
+                        continue
                     combined_text = (
                         f"{method.upper()} {path} - {operation.get('description', '')}"
                     )
@@ -135,6 +180,7 @@ class EndpointSearcherChroma:
                         "operation_id": operation.get("operationId", ""),
                         "description": operation.get("description", ""),
                         "parameters": operation.get("parameters", []),
+                        "body_fields": json.dumps(_body_fields(operation, definitions)),
                     }
                     cleaned_metadata = self._clean_metadata(metadata)
                     documents.append(combined_text)
@@ -177,6 +223,20 @@ class EndpointSearcherChroma:
             self._hash_file.write_text(schema_hash)
         except Exception as e:
             logger.warning(f"Could not persist schema hash: {e}")
+
+    def list_endpoints(self) -> List[dict]:
+        """Metadata of every indexed endpoint (path, method, operation_id, description, ...)."""
+        out: List[dict] = []
+        offset, page = 0, 1000
+        while True:
+            batch = self.collection.get(
+                include=["metadatas"], limit=page, offset=offset
+            )
+            metadatas = batch.get("metadatas") or []
+            out.extend(m for m in metadatas if m)
+            if len(metadatas) < page:
+                return out
+            offset += page
 
     def search(self, query: str, n_results: int = 5) -> Optional[List[dict]]:
         try:

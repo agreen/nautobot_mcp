@@ -23,6 +23,22 @@ All notable changes to the Nautobot MCP Server will be documented in this file.
   directory is never written to. User-added repositories moved to `<data dir>/user_repositories.json`
 - Dependency upper bounds (`mcp<2`, `fastmcp<3`, `chromadb<2`) because `uvx` ignores `uv.lock`
 
+### Hints for the model (0.3.0)
+- Schema search results are compact and actionable: path relative to `/api`, accepted filters (capped),
+  and the **writable request-body fields resolved from the schema's `definitions`** (required first,
+  read-only omitted). Previously only unresolved `$ref` pointers were indexed, so the assistant could
+  not see what a create call needs. Existing indexes rebuild automatically on first start
+- `nautobot_dynamic_api_request` returns HTTP/network failures as structured results with Nautobot's own
+  error detail and a fix-it hint instead of raising; tolerates a leading `/api`; hints how to page; trims
+  oversized lists (`NAUTOBOT_MCP_MAX_RESPONSE_CHARS`); `NAUTOBOT_MCP_DEFAULT_DEPTH` makes the implicit
+  `depth` configurable
+- Resources `nautobot://api/overview` (live instance version, plugins, API apps),
+  `nautobot://api/endpoints/{app}` and `nautobot://guide/api-conventions`; prompts
+  `nautobot_inventory_report`, `nautobot_ip_lookup`, `nautobot_safe_change`
+- Tool descriptions and server instructions tightened (search first, never guess, confirm writes)
+- `--check` now also reports the Nautobot version, plugins and schema size, and authenticates against an
+  endpoint that exists in Nautobot 1.x and 2.x
+
 ### Observability and resilience (0.3.0)
 - Startup progress is reported to clients as MCP log notifications (replayed to late joiners, honoring
   `logging/setLevel`), and index-backed tool calls now wait briefly while reporting MCP progress

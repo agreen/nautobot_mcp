@@ -10,6 +10,12 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import requests
 
+from nautobot_mcp.helpers.api_hints import (
+    error_hint,
+    normalize_api_path,
+    paging_hint,
+    schema_search_response,
+)
 from nautobot_mcp.utils.config import config
 from nautobot_mcp.utils.repo_config import RepositoryConfig, RepositoryConfigManager
 
@@ -26,25 +32,78 @@ async def handle_api_request_schema(
     """
     Handle API schema search requests.
 
-    Args:
-        query: Natural language query describing the desired API operation
-        n_results: Number of results to return
-        endpoint_searcher: Initialized EndpointSearcherChroma instance
-
-    Returns:
-        JSON string containing matching endpoints and base URL
+    Returns compact, ready-to-use endpoint descriptions: method, path (relative to /api),
+    accepted filters, writable body fields, and how to call the endpoint.
     """
     logger.info(
         f"Searching endpoint index for query: '{query}' with n_results={n_results}"
     )
-    results = await asyncio.to_thread(
-        endpoint_searcher.search, query, n_results=n_results
+    hits = await asyncio.to_thread(endpoint_searcher.search, query, n_results=n_results)
+    return json.dumps(
+        schema_search_response(hits, query, endpoint_searcher.base_url), indent=2
     )
-    response_data = {
-        "api_base_url": endpoint_searcher.base_url,
-        "matching_endpoints": results,
+
+
+def _send_request(
+    method: str,
+    url: str,
+    params: Dict[str, Any],
+    body: Dict[str, Any],
+) -> requests.Response:
+    kwargs: Dict[str, Any] = {
+        "headers": config.get_headers(),
+        "timeout": config.API_TIMEOUT,
+        "verify": config.SSL_VERIFY,
     }
-    return json.dumps(response_data, indent=2)
+    if method in ("GET", "DELETE"):
+        kwargs["params"] = params
+    else:
+        kwargs["json"] = body
+    return requests.request(method, url, **kwargs)
+
+
+def _error_result(
+    status: Optional[int], message: str, hint: str, detail: Any = None
+) -> str:
+    result: Dict[str, Any] = {"error": True, "message": message, "hint": hint}
+    if status is not None:
+        result["status"] = status
+    if detail not in (None, "", {}):
+        result["detail"] = detail
+    return json.dumps(result, indent=2)
+
+
+def _fit_response(data: Any, offset: int) -> str:
+    """Serialize ``data`` compactly, trimming list results if it would be too large."""
+    limit = config.MAX_RESPONSE_CHARS
+
+    def dump(value: Any) -> str:
+        return json.dumps(value, separators=(",", ":"))
+
+    note = paging_hint(data, offset) if isinstance(data, dict) else None
+    text = dump(data)
+    if len(text) > limit:
+        if isinstance(data, dict) and isinstance(data.get("results"), list):
+            results = data["results"]
+            total = len(results)
+            while len(text) > limit and len(results) > 1:
+                results = results[: max(1, len(results) // 2)]
+                text = dump({**data, "results": results})
+            data = {**data, "results": results}
+            note = (
+                f"Response trimmed to {len(results)} of the {total} results returned, to fit "
+                f"{limit} characters. Use a smaller limit, narrower filters, or depth=0, and "
+                "page with offset for the rest."
+            )
+        else:
+            return (
+                text[:limit]
+                + f"\n[hint: response cut off at {limit} characters. Use narrower filters, "
+                "a smaller limit, or depth=0.]"
+            )
+    if note and isinstance(data, dict):
+        data = {**data, "_mcp_hint": note}
+    return dump(data)
 
 
 async def handle_dynamic_api_request(
@@ -56,84 +115,78 @@ async def handle_dynamic_api_request(
     """
     Handle dynamic API requests to Nautobot.
 
+    Never raises for an HTTP/network failure: the failure is returned as a JSON result with
+    Nautobot's own error detail and a hint, so the caller can correct the request.
+
     Args:
         method: HTTP method (GET, POST, PUT, PATCH, DELETE)
-        path: API endpoint path
+        path: API endpoint path relative to /api (a leading /api is tolerated)
         params: Query parameters for GET/DELETE requests
         body: JSON body for POST/PUT/PATCH requests
-
-    Returns:
-        JSON string containing the API response
-
-    Raises:
-        ValueError: If unsupported HTTP method is provided
-        requests.HTTPError: If API request fails
     """
     method = method.upper()
-    params = params or {}
+    if method not in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+        return _error_result(
+            None,
+            f"Unsupported method: {method}",
+            "Use one of GET, POST, PUT, PATCH, DELETE.",
+        )
+    path = normalize_api_path(path)
+    params = dict(params or {})
     body = body or {}
 
-    headers = config.get_headers()
-
-    # For GET requests, always include depth=2 to get related object details
-    if method == "GET":
-        params = params.copy()
-        params.setdefault("depth", 2)
+    # GET responses nest related objects up to `depth`; a default keeps results informative.
+    if method == "GET" and config.DEFAULT_DEPTH >= 0 and not path.startswith("/status"):
+        params.setdefault("depth", config.DEFAULT_DEPTH)
 
     full_url = config.get_full_url(path)
     logger.info(f"[nautobot_dynamic_api_request] {method} {full_url}")
 
-    response = None
-    if method == "GET":
-        response = requests.get(
-            full_url,
-            headers=headers,
-            params=params,
-            timeout=config.API_TIMEOUT,
-            verify=config.SSL_VERIFY,
-        )
-    elif method == "POST":
-        response = requests.post(
-            full_url,
-            headers=headers,
-            json=body,
-            timeout=config.API_TIMEOUT,
-            verify=config.SSL_VERIFY,
-        )
-    elif method == "PUT":
-        response = requests.put(
-            full_url,
-            headers=headers,
-            json=body,
-            timeout=config.API_TIMEOUT,
-            verify=config.SSL_VERIFY,
-        )
-    elif method == "PATCH":
-        response = requests.patch(
-            full_url,
-            headers=headers,
-            json=body,
-            timeout=config.API_TIMEOUT,
-            verify=config.SSL_VERIFY,
-        )
-    elif method == "DELETE":
-        response = requests.delete(
-            full_url,
-            headers=headers,
-            params=params,
-            timeout=config.API_TIMEOUT,
-            verify=config.SSL_VERIFY,
-        )
-    else:
-        raise ValueError(f"Unsupported method: {method}")
-
-    response.raise_for_status()
     try:
-        data = response.json()
-    except Exception:
-        data = {"response_text": response.text}
+        response = await asyncio.to_thread(
+            _send_request, method, full_url, params, body
+        )
+    except requests.exceptions.Timeout:
+        return _error_result(
+            None,
+            f"Nautobot did not answer within {config.API_TIMEOUT}s.",
+            "Retry with a smaller limit, narrower filters or depth=0. If it keeps timing out, "
+            "the server may be slow or unreachable (raise API_TIMEOUT).",
+        )
+    except requests.exceptions.SSLError as e:
+        return _error_result(
+            None,
+            f"TLS error talking to Nautobot: {e}",
+            "For a self-signed certificate set SSL_VERIFY=false on the MCP server.",
+        )
+    except requests.exceptions.RequestException as e:
+        return _error_result(
+            None,
+            f"Could not reach Nautobot at {config.NAUTOBOT_URL}: {e}",
+            "Check NAUTOBOT_URL and network access, or run `nautobot-mcp --check`.",
+        )
 
-    return json.dumps(data, indent=2)
+    try:
+        data: Any = response.json()
+    except ValueError:
+        data = None
+
+    if not response.ok:
+        detail = data if data is not None else response.text[:1500]
+        return _error_result(
+            response.status_code,
+            f"{method} {path} failed: HTTP {response.status_code} {response.reason}",
+            error_hint(response.status_code),
+            detail,
+        )
+
+    if response.status_code == 204 or (data is None and not response.text):
+        return json.dumps(
+            {"status": response.status_code, "result": "success (no content returned)"}
+        )
+    if data is None:
+        data = {"response_text": response.text[:5000]}
+    return _fit_response(data, int(params.get("offset") or 0))
 
 
 async def handle_refresh_endpoint_index(

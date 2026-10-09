@@ -37,6 +37,12 @@ class Config:
     # progress) before answering "not_ready". 0 = never wait.
     READY_WAIT: float = float(os.getenv("NAUTOBOT_MCP_READY_WAIT", "20"))
 
+    # `depth` added to GET requests (how deeply related objects are expanded). A negative
+    # value omits it. Higher values give richer but much larger responses.
+    DEFAULT_DEPTH: int = int(os.getenv("NAUTOBOT_MCP_DEFAULT_DEPTH", "2"))
+    # Longest tool response returned for an API call; list results are trimmed to fit.
+    MAX_RESPONSE_CHARS: int = int(os.getenv("NAUTOBOT_MCP_MAX_RESPONSE_CHARS", "60000"))
+
     # Request timeouts (seconds)
     API_TIMEOUT: int = int(os.getenv("API_TIMEOUT", "10"))
     # Fetching the full Swagger schema can be slow on a large Nautobot instance

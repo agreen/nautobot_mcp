@@ -43,17 +43,37 @@ def validate_config() -> List[Tuple[str, bool, str]]:
         schema_response = requests.get(
             config.GLOBAL_TOOL_PROMPT,
             headers=config.get_headers(),
-            timeout=5,
+            timeout=config.SCHEMA_TIMEOUT,
             verify=config.SSL_VERIFY,
         )
         if schema_response.status_code == 200:
-            results.append(
-                (
-                    "OpenAPI Schema",
-                    True,
-                    f"✓ Schema accessible at {config.GLOBAL_TOOL_PROMPT}",
+            try:
+                schema = schema_response.json()
+                paths = schema.get("paths", {})
+                operations = sum(
+                    1
+                    for methods in paths.values()
+                    for m in methods.values()
+                    if isinstance(m, dict)
                 )
-            )
+                has_defs = bool(schema.get("definitions"))
+                note = f"{len(paths)} paths, {operations} operations"
+                if not has_defs:
+                    note += (
+                        " (no `definitions`: POST/PATCH body fields will not be listed)"
+                    )
+                results.append(
+                    ("OpenAPI Schema", True, f"✓ {note} at {config.GLOBAL_TOOL_PROMPT}")
+                )
+            except ValueError:
+                results.append(
+                    (
+                        "OpenAPI Schema",
+                        False,
+                        f"✗ {config.GLOBAL_TOOL_PROMPT} did not return JSON "
+                        "(wrong NAUTOBOT_URL, or a login page?)",
+                    )
+                )
         else:
             results.append(
                 (
@@ -91,11 +111,36 @@ def validate_config() -> List[Tuple[str, bool, str]]:
     except Exception as e:
         results.append(("API Endpoint", False, f"✗ Cannot reach API: {e}"))
 
+    # Test 3b: instance facts (what the nautobot://api/overview resource reports)
+    from nautobot_mcp.helpers.nautobot_overview import fetch_instance_info
+
+    info = fetch_instance_info()
+    if info.get("available"):
+        plugins = info.get("plugins") or {}
+        results.append(
+            (
+                "Nautobot version",
+                True,
+                f"✓ Nautobot {info.get('nautobot_version')} "
+                f"(Python {info.get('python_version')}), "
+                f"{len(plugins)} plugin(s): {', '.join(plugins) or 'none'}",
+            )
+        )
+    else:
+        results.append(
+            (
+                "Nautobot version",
+                False,
+                f"✗ /api/status/ not readable: {info.get('error')}",
+            )
+        )
+
     # Test 4: Authentication (if token provided)
     if config.NAUTOBOT_TOKEN:
         try:
             auth_response = requests.get(
-                f"{config.NAUTOBOT_BASE_URL}/users/users/",  # Common endpoint to test auth
+                # exists in Nautobot 1.x and 2.x; a cheap authenticated read
+                f"{config.NAUTOBOT_BASE_URL}/extras/statuses/?limit=1",
                 headers=config.get_headers(),
                 timeout=5,
                 verify=config.SSL_VERIFY,
@@ -107,6 +152,15 @@ def validate_config() -> List[Tuple[str, bool, str]]:
             elif auth_response.status_code == 401:
                 results.append(
                     ("Authentication", False, "✗ Token authentication failed (401)")
+                )
+            elif auth_response.status_code == 403:
+                results.append(
+                    (
+                        "Authentication",
+                        True,
+                        "✓ Token accepted, but it may not be allowed to read statuses "
+                        "(403); check its permissions",
+                    )
                 )
             else:
                 results.append(

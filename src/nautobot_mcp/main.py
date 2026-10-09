@@ -31,6 +31,12 @@ from typing import Annotated, Any, Optional
 import urllib3
 from pydantic import Field
 
+from nautobot_mcp.helpers.api_hints import API_CONVENTIONS_MD
+from nautobot_mcp.helpers.nautobot_overview import (
+    InstanceInfoCache,
+    build_app_endpoints,
+    build_overview,
+)
 from nautobot_mcp.helpers.startup import (
     ENDPOINT_INDEX,
     KB_INDEX,
@@ -89,9 +95,13 @@ os.environ["POSTHOG_API_KEY"] = config.POSTHOG_API_KEY
 def _instructions(kb_enabled: bool) -> str:
     """Server instructions, returned to every client in the ``initialize`` result."""
     text = (
-        "Nautobot MCP server. To work with Nautobot data: first search the API schema with "
-        f"`{config.API_PREFIX}_api_request_schema` to find the right endpoint and parameters, "
-        "then call `nautobot_dynamic_api_request` (GET/POST/PUT/PATCH/DELETE)."
+        "Nautobot MCP server. To work with Nautobot data: (1) search the API schema with "
+        f"`{config.API_PREFIX}_api_request_schema` to find the endpoint, its filters and body "
+        "fields; never guess paths or field names; (2) call it with "
+        "`nautobot_dynamic_api_request` (paths are relative to /api); (3) confirm with the "
+        "user before any write or delete. Read nautobot://api/overview for this instance's "
+        "Nautobot version, plugins and API apps, and nautobot://guide/api-conventions for "
+        "filtering, paging and write conventions."
     )
     if kb_enabled:
         text += (
@@ -183,13 +193,9 @@ def build_app(state: ServerState):
         return JSONResponse(snapshot, status_code=200 if snapshot["ready"] else 503)
 
     # ------------------------------------------------------------------ API tools
-    global_tool_prompt = config.GLOBAL_TOOL_PROMPT
-    if global_tool_prompt and not global_tool_prompt.endswith(" "):
-        global_tool_prompt += " "
-
     @app.tool(
         name=f"{config.API_PREFIX}_api_request_schema",
-        description=get_api_request_schema_description(global_tool_prompt),
+        description=get_api_request_schema_description(),
     )
     async def api_request_schema(
         query: Annotated[
@@ -206,7 +212,7 @@ def build_app(state: ServerState):
 
     @app.tool(
         name="nautobot_dynamic_api_request",
-        description=get_dynamic_api_request_description(),
+        description=get_dynamic_api_request_description(config.DEFAULT_DEPTH),
     )
     async def dynamic_api_request(
         method: Annotated[
@@ -333,6 +339,61 @@ def build_app(state: ServerState):
 
     # ------------------------------------------------------------------ resources
     # Read-only context a client (or user) can attach without invoking a tool.
+    info_cache = InstanceInfoCache()
+
+    async def indexed_endpoints() -> list | None:
+        """All indexed endpoints, or None while the endpoint index is still being built."""
+        if await state.ensure_ready(ENDPOINT_INDEX, None):
+            return None
+        return await asyncio.to_thread(state.endpoint_searcher.list_endpoints)
+
+    @app.resource(
+        "nautobot://guide/api-conventions",
+        name="api_conventions",
+        description="How to read, filter, page and safely change data through Nautobot's REST "
+        "API, and how to interpret its errors. Read before building non-trivial queries.",
+        mime_type="text/markdown",
+    )
+    def api_conventions_resource() -> str:
+        return API_CONVENTIONS_MD
+
+    @app.resource(
+        "nautobot://api/overview",
+        name="api_overview",
+        description="The connected Nautobot instance: version, python/django, installed "
+        "plugins, and every API app with its resources. Read this to know what this "
+        "specific Nautobot supports before searching.",
+        mime_type="application/json",
+    )
+    async def api_overview_resource() -> str:
+        info = await asyncio.to_thread(info_cache.get)
+        endpoints = await indexed_endpoints()
+        if endpoints is None:
+            return json.dumps(
+                {
+                    "nautobot": {"url": config.NAUTOBOT_URL, **info},
+                    "api": "The API index is still being built; read this resource again shortly.",
+                },
+                indent=2,
+            )
+        return build_overview(endpoints, info)
+
+    @app.resource(
+        "nautobot://api/endpoints/{app}",
+        name="api_endpoints_for_app",
+        description="Every endpoint of one Nautobot API app (e.g. dcim, ipam, circuits, "
+        "extras, tenancy) with the HTTP methods each supports. Use it to browse when the "
+        "schema search does not surface what you need.",
+        mime_type="application/json",
+    )
+    async def api_endpoints_resource(app: str) -> str:
+        endpoints = await indexed_endpoints()
+        if endpoints is None:
+            return json.dumps(
+                {"error": "The API index is still being built; retry shortly."}
+            )
+        return build_app_endpoints(endpoints, app)
+
     @app.resource(
         "nautobot://server/status",
         name="server_status",
@@ -394,6 +455,61 @@ def build_app(state: ServerState):
             "index ready, how long did startup and warm-up take, what failed or is still in "
             "progress, and what (if anything) should I do about it? Also check that the "
             "Nautobot URL looks right and that a token is configured."
+        )
+
+    @app.prompt(
+        name="nautobot_inventory_report",
+        description="Summarize part of the Nautobot inventory (devices, locations, IPs, ...).",
+    )
+    def nautobot_inventory_report(
+        scope: Annotated[
+            str, Field(description="What to inventory, e.g. 'devices in location DFW1'")
+        ],
+    ) -> str:
+        return (
+            f"Produce a concise inventory report for: {scope}\n\n"
+            "Use the API schema search to find the right list endpoints, then query them with "
+            "narrow filters and a modest `limit` (page with `offset` only if needed). Report "
+            "counts first, then a short table of the key fields (name, status, role/type, "
+            "location). Use `count` from the list response instead of paging just to count. "
+            "Make read-only calls only. Mention anything you could not retrieve."
+        )
+
+    @app.prompt(
+        name="nautobot_ip_lookup",
+        description="Find what an IP address or prefix is assigned to in Nautobot.",
+    )
+    def nautobot_ip_lookup(
+        address: Annotated[
+            str, Field(description="An IP address or prefix, e.g. 10.1.2.3")
+        ],
+    ) -> str:
+        return (
+            f"Find everything Nautobot knows about {address}: the IP address / prefix record, "
+            "its status, role, tenant and namespace/VRF where applicable, and the device and "
+            "interface it is assigned to, if any. Use the API schema search to find the IPAM "
+            "endpoints and filters (do not guess them). Read-only. If several records match, "
+            "list them all and say how they differ."
+        )
+
+    @app.prompt(
+        name="nautobot_safe_change",
+        description="Make a change in Nautobot with a preview, explicit confirmation and verification.",
+    )
+    def nautobot_safe_change(
+        change: Annotated[
+            str, Field(description="The change to make, in plain language")
+        ],
+    ) -> str:
+        return (
+            f"I want to make this change in Nautobot: {change}\n\n"
+            "1. Find the endpoint(s) with the API schema search and read-only GET the current "
+            "object(s) to confirm exactly which records are affected.\n"
+            "2. Show me a preview: each request (method, path, body) and the before/after of "
+            "every field that changes. Do NOT send any write yet.\n"
+            "3. Wait for my explicit confirmation. Prefer PATCH over PUT.\n"
+            "4. After confirmation, apply the change, then GET the object(s) again and confirm "
+            "the result matches. If anything fails, stop and report the error detail."
         )
 
     if kb_enabled:

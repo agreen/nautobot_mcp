@@ -14,32 +14,31 @@ from typing import Any, Dict
 
 
 def get_api_request_schema_description(global_tool_prompt: str = "") -> str:
-    """
-    Get description for API request schema tool.
-
-    Args:
-        global_tool_prompt: Optional global prompt to prepend
-
-    Returns:
-        Tool description string
-    """
+    """Description for the API schema search tool."""
     base_description = (
-        "Search for Nautobot API endpoints using natural language. "
-        "Returns endpoint paths, methods, parameters, and response formats. "
-        "Use this before making API requests to find the correct endpoint."
+        "Find Nautobot API endpoints by meaning (e.g. 'devices in a location', 'create an IP "
+        "address'). Returns each match's method, path (relative to /api), accepted filters and "
+        "writable body fields. Always use this before nautobot_dynamic_api_request; never guess "
+        "paths or field names."
     )
     if global_tool_prompt and not global_tool_prompt.endswith(" "):
         global_tool_prompt += " "
     return f"{global_tool_prompt}{base_description}"
 
 
-def get_dynamic_api_request_description() -> str:
-    """Get description for dynamic API request tool."""
+def get_dynamic_api_request_description(default_depth: int = 2) -> str:
+    """Description for the dynamic API request tool."""
+    depth = (
+        f"; related objects expand to depth {default_depth} by default (override via params depth)"
+        if default_depth >= 0
+        else ""
+    )
     return (
-        "Execute HTTP requests to Nautobot API for CRUD operations. "
-        "Use GET to retrieve data, POST to create, PUT/PATCH to update, DELETE to remove. "
-        "Query the API schema tool first to find correct endpoints and parameters. "
-        "GET/DELETE use 'params', POST/PUT/PATCH use 'body'."
+        "Execute a Nautobot REST API call. `path` is relative to /api with a trailing slash "
+        "(/dcim/devices/). GET `params` are filters (limit/offset to page, name__ic = contains)"
+        + depth
+        + ". POST/PUT/PATCH use `body` (prefer PATCH). Confirm with the user before any write "
+        "or delete. Errors return Nautobot's detail plus a hint."
     )
 
 

@@ -36,7 +36,22 @@ class FakeSearcher:
         return True
 
     def search(self, query, n_results=5):
-        return [{"document": "GET /api/dcim/devices/ - List devices", "metadata": {}}]
+        return [
+            {
+                "document": "GET /dcim/devices/ - List devices",
+                "metadata": {
+                    "path": "/dcim/devices/",
+                    "method": "GET",
+                    "description": "List devices",
+                    "parameters": json.dumps(
+                        [
+                            {"name": "limit", "in": "query"},
+                            {"name": "name", "in": "query"},
+                        ]
+                    ),
+                },
+            }
+        ]
 
 
 class FakeKB:
@@ -279,6 +294,9 @@ async def test_advertises_logging_resources_prompts_and_instructions():
             "query_nautobot",
             "diagnose_nautobot_mcp",
             "nautobot_job_example",
+            "nautobot_inventory_report",
+            "nautobot_ip_lookup",
+            "nautobot_safe_change",
         }
 
 
@@ -361,9 +379,7 @@ async def test_client_receives_startup_logs_and_tool_progress_end_to_end(monkeyp
         body = json.loads(
             (result.content if hasattr(result, "content") else result)[0].text
         )
-        assert body["matching_endpoints"][0]["document"].startswith(
-            "GET /api/dcim/devices/"
-        )
+        assert body["matching_endpoints"][0]["path"] == "/dcim/devices/"
         await asyncio.sleep(0.2)
     assert any("serving over stdio" in str(m) for m in logs), logs
     assert any("indexing Swagger schema" in str(m) for m in logs), logs
