@@ -23,6 +23,16 @@ All notable changes to the Nautobot MCP Server will be documented in this file.
   directory is never written to. User-added repositories moved to `<data dir>/user_repositories.json`
 - Dependency upper bounds (`mcp<2`, `fastmcp<3`, `chromadb<2`) because `uvx` ignores `uv.lock`
 
+### MetaMCP compatibility (0.3.0)
+- Per-app endpoint resources are published as concrete, listed resources (MetaMCP can only read URIs that
+  appeared in `resources/list`; templates are not readable there). Plugin apps are added when the index is
+  ready, with a `resources/list_changed` notification
+- `nautobot-mcp --print-instructions` prints the server instructions for pasting into a MetaMCP namespace
+  description (MetaMCP does not forward server `instructions`)
+- Hint text tolerates the `<server>__` name prefix hosts add to tools and prompts; `not_ready` results
+  include `retry_in_seconds`
+- New page: Using with MetaMCP
+
 ### Hints for the model (0.3.0)
 - Schema search results are compact and actionable: path relative to `/api`, accepted filters (capped),
   and the **writable request-body fields resolved from the schema's `definitions`** (required first,

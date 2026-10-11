@@ -169,7 +169,8 @@ def schema_search_response(
     return {
         "matching_endpoints": [shape_endpoint(h) for h in hits],
         "how_to_call": (
-            "Use nautobot_dynamic_api_request with the method and path shown (relative to /api). "
+            "Use the API request tool (nautobot_dynamic_api_request; your client may show it with "
+            "a server-name prefix) with the method and path shown (relative to /api). "
             "Replace {id} with the object's UUID. For GET, query_parameters are the accepted "
             "filters (add __ic for case-insensitive contains, e.g. name__ic=sw). For writes, "
             "body_fields lists the fields; confirm changes with the user first."

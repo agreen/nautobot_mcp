@@ -178,6 +178,18 @@ def test_console_script_entry_point_exists():
 
 
 @pytest.mark.unit
+def test_print_instructions_prints_the_server_instructions(capsys):
+    import asyncio
+
+    from nautobot_mcp.main import main
+
+    with patch("sys.argv", ["nautobot-mcp", "--print-instructions"]):
+        asyncio.run(main())
+    out = capsys.readouterr().out
+    assert "nautobot://api/overview" in out and "confirm with the user" in out
+
+
+@pytest.mark.unit
 def test_check_flag_parses():
     from nautobot_mcp.main import parse_arguments
 

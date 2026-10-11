@@ -18,8 +18,8 @@ def get_api_request_schema_description(global_tool_prompt: str = "") -> str:
     base_description = (
         "Find Nautobot API endpoints by meaning (e.g. 'devices in a location', 'create an IP "
         "address'). Returns each match's method, path (relative to /api), accepted filters and "
-        "writable body fields. Always use this before nautobot_dynamic_api_request; never guess "
-        "paths or field names."
+        "writable body fields. Always use this before the API request tool "
+        "(nautobot_dynamic_api_request); never guess paths or field names."
     )
     if global_tool_prompt and not global_tool_prompt.endswith(" "):
         global_tool_prompt += " "

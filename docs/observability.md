@@ -20,6 +20,10 @@ the server tells you what it is doing.
 MCP's built-in `ping` request also works at any time and is answered by the protocol layer, independent
 of the indexes.
 
+> **Hosts differ in what they relay.** MetaMCP, for example, does not forward server `instructions`, log
+> notifications or progress notifications (see [Using with MetaMCP](metamcp.md)); there the stderr log, the
+> `not_ready` tool results and the status tool/resource are what you and the model see.
+
 If the index is still not ready after the wait, the tool returns:
 
 ```json
@@ -59,7 +63,7 @@ schema skips re-embedding and is ready in seconds.
 | URI | Contents |
 |---|---|
 | `nautobot://api/overview` | The connected instance: Nautobot/Python/Django versions and installed plugins (from `/api/status/`), plus every API app with its resources and operation counts (from the indexed schema). Tells the assistant what *this* Nautobot supports. |
-| `nautobot://api/endpoints/{app}` | Every endpoint of one app (`dcim`, `ipam`, `extras`, ...) with its supported HTTP methods; a way to browse when the semantic search misses. An unknown app lists the valid ones. |
+| `nautobot://api/endpoints/{app}` | Every endpoint of one app (`dcim`, `ipam`, `extras`, ...) with its supported HTTP methods; a way to browse when the semantic search misses. Published as a concrete resource per app (plugin apps are added once the index is ready) because some hosts cannot read URI templates; an unknown app lists the valid ones. |
 | `nautobot://guide/api-conventions` | Paging, filtering and lookup suffixes, `depth`, UUIDs, how to write safely, and how to read errors |
 | `nautobot://server/status`, `nautobot://server/startup-log` | The server's own health and warm-up history |
 | `nautobot://kb/repositories` | Knowledge-base repositories (knowledge base enabled only) |

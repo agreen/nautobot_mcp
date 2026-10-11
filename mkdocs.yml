@@ -52,6 +52,7 @@ nav:
       - Architecture: architecture.md
       - MCP Tools: tools.md
       - Observability: observability.md
+      - Using with MetaMCP: metamcp.md
       - Testing: testing.md
       - Knowledge Base: knowledge-base.md
       - Examples: examples.md

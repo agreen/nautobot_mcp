@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional, Tuple
 
 from nautobot_mcp import __version__
 from nautobot_mcp.utils.config import config
@@ -186,6 +186,8 @@ class ServerState:
         self._sessions: Dict[int, Any] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._loop_thread: Optional[int] = None
+        # Called (and awaited) once the endpoint index is ready, e.g. to publish per-app resources
+        self.on_index_ready: Optional[Callable[[], Awaitable[None]]] = None
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> None:
@@ -275,6 +277,22 @@ class ServerState:
         self._sessions[id(session)] = session
         for event in list(self.events)[-replay:]:
             self._schedule_send(session, event)
+
+    async def notify_sessions(self, send: Callable[[Any], Awaitable[None]]) -> None:
+        """Run ``send(session)`` for every connected session, dropping ones that have gone."""
+        for session in list(self._sessions.values()):
+            try:
+                await send(session)
+            except Exception:  # noqa: BLE001 - client went away
+                self._sessions.pop(id(session), None)
+
+    async def _fire_index_ready(self) -> None:
+        if self.on_index_ready is None:
+            return
+        try:
+            await self.on_index_ready()
+        except Exception:  # noqa: BLE001 - a hook must never break startup
+            logger.exception("on_index_ready hook failed")
 
     def set_log_level(self, level: str) -> None:
         if level in _LEVEL_RANK:
@@ -457,6 +475,11 @@ class ServerState:
                 "status": "not_ready",
                 "component": component,
                 "message": message,
+                **(
+                    {}
+                    if status.state is ComponentState.FAILED
+                    else {"retry_in_seconds": 15}
+                ),
                 "server": self.snapshot(),
             },
             indent=2,
@@ -598,6 +621,7 @@ class ServerState:
                 )
                 if ok:
                     self._mark(component, ComponentState.READY)
+                    await self._fire_index_ready()
                     return
                 error = getattr(self.endpoint_searcher, "last_error", None)
                 if error is not None and _is_store_error(error):
@@ -608,6 +632,7 @@ class ServerState:
                         ComponentState.READY,
                         "Nautobot schema unreachable; serving previously indexed endpoints",
                     )
+                    await self._fire_index_ready()
                     return
                 problem = f"could not fetch {config.GLOBAL_TOOL_PROMPT}; retrying in {delay:.0f}s"
             except asyncio.CancelledError:

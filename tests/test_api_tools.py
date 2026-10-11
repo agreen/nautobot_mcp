@@ -457,3 +457,99 @@ def test_check_reports_version_schema_and_auth(nautobot, capsys, monkeypatch):
     results = {name: (ok, msg) for name, ok, msg in validate_config.validate_config()}
     assert not results["Authentication"][0] and "401" in results["Authentication"][1]
     assert not results["Nautobot version"][0]
+
+
+# --------------------------------------------------------------------------- MetaMCP compatibility
+# MetaMCP (and similar proxies) only serve `resources/read` for URIs that appeared in
+# `resources/list`; URI templates are listed but cannot be read there. So everything a model is
+# pointed at must be a concrete, listed resource.
+@pytest.mark.asyncio
+async def test_every_documented_resource_is_listed_concretely_and_readable(searcher):
+    async with Client(build_app(ready_state(searcher))) as client:
+        listed = {str(r.uri) for r in await client.list_resources()}
+        for uri in (
+            "nautobot://api/overview",
+            "nautobot://guide/api-conventions",
+            "nautobot://server/status",
+            "nautobot://server/startup-log",
+            "nautobot://api/endpoints/dcim",
+            "nautobot://api/endpoints/ipam",
+            "nautobot://api/endpoints/extras",
+        ):
+            assert uri in listed, uri
+        # a proxy that only honors listed URIs can read every one of them
+        for uri in sorted(listed):
+            assert (await client.read_resource(uri))[0].text, uri
+
+
+@pytest.mark.asyncio
+async def test_plugin_apps_get_resources_once_the_index_is_ready(monkeypatch):
+    app = FakeNautobot(token="secret", extra_endpoints=3)
+    server = serve(app)
+    url = f"http://127.0.0.1:{server.server_port}"
+    for name, value in {
+        "NAUTOBOT_URL": url,
+        "NAUTOBOT_BASE_URL": url + "/api",
+        "GLOBAL_TOOL_PROMPT": url + "/api/swagger.json",
+        "NAUTOBOT_TOKEN": "secret",
+        "READY_WAIT": 0.0,
+    }.items():
+        monkeypatch.setattr(Config, name, value)
+    try:
+        from nautobot_mcp.helpers.endpoint_searcher_chroma import EndpointSearcherChroma
+
+        with patch(
+            "nautobot_mcp.helpers.endpoint_searcher_chroma.LocalEmbeddingFunction",
+            BowEmbedding,
+        ):
+            searcher = EndpointSearcherChroma()
+            assert searcher.initialize_collection() is True
+        state = ready_state(searcher)
+        sessions_told = []
+
+        class Session:
+            async def send_resource_list_changed(self):
+                sessions_told.append(True)
+
+        state._sessions[1] = Session()
+        async with Client(build_app(state)) as client:
+            before = {str(r.uri) for r in await client.list_resources()}
+            assert "nautobot://api/endpoints/plugins" not in before
+            await (
+                state.on_index_ready()
+            )  # what the startup worker does when the index is ready
+            after = {str(r.uri) for r in await client.list_resources()}
+            assert "nautobot://api/endpoints/plugins" in after
+            plugins = parse(
+                (await client.read_resource("nautobot://api/endpoints/plugins"))[0].text
+            )
+            assert plugins["endpoint_count"] == 3
+            assert sessions_told == [
+                True
+            ]  # clients were told the resource list changed
+            await state.on_index_ready()  # idempotent: nothing new, nobody told again
+            assert sessions_told == [True]
+    finally:
+        server.shutdown()
+
+
+def test_hint_text_tolerates_server_name_prefixes():
+    from nautobot_mcp.helpers.api_hints import schema_search_response
+    from nautobot_mcp.helpers.tool_definitions import get_api_request_schema_description
+
+    hits = [
+        {"metadata": {"path": "/dcim/devices/", "method": "GET", "parameters": "[]"}}
+    ]
+    how = schema_search_response(hits, "q", "u")["how_to_call"]
+    assert "server-name prefix" in how and "nautobot_dynamic_api_request" in how
+    assert "nautobot_dynamic_api_request" in get_api_request_schema_description()
+
+
+@pytest.mark.asyncio
+async def test_not_ready_tells_the_model_when_to_retry():
+    state = ServerState(enable_kb=False)
+    state._mark(ENDPOINT_INDEX, ComponentState.INITIALIZING, "indexing Swagger schema")
+    body = parse(state.not_ready_response(ENDPOINT_INDEX))
+    assert body["retry_in_seconds"] == 15
+    state._mark(ENDPOINT_INDEX, ComponentState.FAILED, "boom")
+    assert "retry_in_seconds" not in parse(state.not_ready_response(ENDPOINT_INDEX))

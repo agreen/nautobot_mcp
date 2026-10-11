@@ -31,7 +31,7 @@ from typing import Annotated, Any, Optional
 import urllib3
 from pydantic import Field
 
-from nautobot_mcp.helpers.api_hints import API_CONVENTIONS_MD
+from nautobot_mcp.helpers.api_hints import API_CONVENTIONS_MD, endpoint_app
 from nautobot_mcp.helpers.nautobot_overview import (
     InstanceInfoCache,
     build_app_endpoints,
@@ -92,6 +92,21 @@ logger = logging.getLogger("nautobot_mcp")
 os.environ["POSTHOG_API_KEY"] = config.POSTHOG_API_KEY
 
 
+# Nautobot's built-in REST API apps. Published as concrete resources up front; apps added by
+# plugins are discovered from the schema once the index is ready.
+CORE_API_APPS = (
+    "circuits",
+    "cloud",
+    "dcim",
+    "extras",
+    "ipam",
+    "tenancy",
+    "users",
+    "virtualization",
+    "wireless",
+)
+
+
 def _instructions(kb_enabled: bool) -> str:
     """Server instructions, returned to every client in the ``initialize`` result."""
     text = (
@@ -110,10 +125,11 @@ def _instructions(kb_enabled: bool) -> str:
         )
     text += (
         " Search indexes are built in the background after startup (the first run downloads "
-        "an embedding model and can take a few minutes). Index-backed tools wait briefly "
-        'while reporting progress, then return {"status": "not_ready"}. Call '
-        "`nautobot_server_status` (or read the nautobot://server/status resource) to see "
-        "what the server is doing; startup progress is also sent as log notifications."
+        "an embedding model and can take a few minutes). Index-backed tools wait briefly, then "
+        'return {"status": "not_ready"} with the progress so far; retry after the suggested '
+        "delay. Call `nautobot_server_status` (or read the nautobot://server/status resource) "
+        "to see what the server is doing. Tool names may carry a server-name prefix in your "
+        "client."
     )
     return text
 
@@ -378,21 +394,63 @@ def build_app(state: ServerState):
             )
         return build_overview(endpoints, info)
 
-    @app.resource(
-        "nautobot://api/endpoints/{app}",
-        name="api_endpoints_for_app",
-        description="Every endpoint of one Nautobot API app (e.g. dcim, ipam, circuits, "
-        "extras, tenancy) with the HTTP methods each supports. Use it to browse when the "
-        "schema search does not surface what you need.",
-        mime_type="application/json",
-    )
-    async def api_endpoints_resource(app: str) -> str:
+    async def endpoints_json(app_name: str) -> str:
         endpoints = await indexed_endpoints()
         if endpoints is None:
             return json.dumps(
                 {"error": "The API index is still being built; retry shortly."}
             )
-        return build_app_endpoints(endpoints, app)
+        return build_app_endpoints(endpoints, app_name)
+
+    # Some hosts (MetaMCP among them) only serve `resources/read` for URIs that appeared in
+    # `resources/list`, so a URI *template* alone is unreadable there. Publish one concrete
+    # resource per API app as well, and keep the template for clients that support it.
+    @app.resource(
+        "nautobot://api/endpoints/{app}",
+        name="api_endpoints_for_app",
+        description="Every endpoint of one Nautobot API app (e.g. dcim, ipam, circuits, "
+        "extras, tenancy) with the HTTP methods each supports.",
+        mime_type="application/json",
+    )
+    async def api_endpoints_resource(app: str) -> str:
+        return await endpoints_json(app)
+
+    published_apps: set[str] = set()
+
+    def publish_app_resource(app_name: str) -> None:
+        if app_name in published_apps:
+            return
+        published_apps.add(app_name)
+
+        async def read() -> str:
+            return await endpoints_json(app_name)
+
+        app.resource(
+            f"nautobot://api/endpoints/{app_name}",
+            name=f"api_endpoints_{app_name}",
+            description=f"Every endpoint of the Nautobot '{app_name}' API app with the HTTP "
+            "methods each supports. Use it to browse when the schema search does not surface "
+            "what you need.",
+            mime_type="application/json",
+        )(read)
+
+    for core_app in CORE_API_APPS:
+        publish_app_resource(core_app)
+
+    async def publish_discovered_apps() -> None:
+        """Once the index exists, add resources for apps the core list did not know (plugins)."""
+        endpoints = await asyncio.to_thread(state.endpoint_searcher.list_endpoints)
+        before = len(published_apps)
+        for meta in endpoints:
+            name = endpoint_app(meta.get("path", ""))
+            if name:
+                publish_app_resource(name)
+        if len(published_apps) != before:
+            await state.notify_sessions(
+                lambda session: session.send_resource_list_changed()
+            )
+
+    state.on_index_ready = publish_discovered_apps
 
     @app.resource(
         "nautobot://server/status",
@@ -436,7 +494,8 @@ def build_app(state: ServerState):
     ) -> str:
         return (
             f"Task: {task}\n\n"
-            f"1. Use `{config.API_PREFIX}_api_request_schema` to find the endpoint(s) and "
+            f"1. Use the API schema search tool (`{config.API_PREFIX}_api_request_schema`; your "
+            "client may show it with a server-name prefix) to find the endpoint(s) and "
             "parameters for this task. Do not guess paths.\n"
             "2. Use `nautobot_dynamic_api_request` to call them. Prefer GET first to inspect "
             "current state, and use filters and `limit` to keep responses small.\n"
@@ -622,6 +681,13 @@ Examples:
         )
 
     parser.add_argument(
+        "--print-instructions",
+        action="store_true",
+        help="Print the server instructions (for pasting into hosts that do not forward "
+        "them, e.g. a MetaMCP namespace description) and exit",
+    )
+
+    parser.add_argument(
         "--check",
         action="store_true",
         help="Check the Nautobot connection settings (URL, schema, token) and exit",
@@ -647,6 +713,10 @@ Examples:
 async def main():
     """Main entrypoint that dispatches to the appropriate transport mode."""
     args = parse_arguments()
+
+    if args.print_instructions:
+        print(_instructions(config.ENABLE_KB))
+        return
 
     if args.check:
         from nautobot_mcp.utils import validate_config
