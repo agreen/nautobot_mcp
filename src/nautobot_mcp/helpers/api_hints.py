@@ -38,12 +38,15 @@ for its version and installed apps.
   `status=active`. Repeat a parameter to match any of several values. Many fields accept lookup
   suffixes such as `name__ic` (contains, case-insensitive), `name__isw` (starts with),
   `name__n` (not), and `__gte` / `__lte` for numbers and dates.
-- `q=<text>` runs a general search on endpoints that support it.
+- Many list endpoints (devices, locations, ...) accept `q=<text>` for a general search; check the
+  endpoint's `query_parameters` before relying on it.
+- `sort=<field>` orders results (prefix `-` for descending) where supported.
 - Related objects (location, tenant, status, role, ...) are usually filtered by name or UUID. Check
   the endpoint's `query_parameters` in the schema search result for what is accepted.
-- `depth` controls how much detail nested related objects carry in responses. Higher values give
-  more detail and much larger responses. This server adds a default `depth` to GET requests (see
-  the tool description); pass `depth` explicitly to override it.
+- `depth` (0-10) controls how much nested related objects expand: 0 (the default here) returns
+  references only (id, url, object_type), 1 adds the referenced objects' own fields, and higher
+  values expand further and make responses much larger. `include=config_context`,
+  `include=relationships` or `include=computed_fields` add optional data. Pass these explicitly.
 - Keep responses small: filter, set a modest `limit`, and fetch further pages only if needed.
 
 ## Changing data
@@ -53,6 +56,7 @@ for its version and installed apps.
 - Related objects in a body are normally given by UUID (some versions also accept a name or other
   natural key). Look the object up first instead of inventing identifiers.
 - Custom fields live under `custom_fields`.
+- Bulk create/update/delete accept a JSON list on the list endpoint (`PATCH` items need their `id`).
 - Validation errors come back as HTTP 400 with a JSON body naming each offending field.
 
 ## Interpreting errors
@@ -75,7 +79,11 @@ def normalize_api_path(path: str) -> str:
         path = "/" + path
     if path == "/api" or path.startswith("/api/"):
         path = path[len("/api") :] or "/"
-    return path
+    # Nautobot redirects (or rejects writes to) paths without a trailing slash
+    base, sep, query = path.partition("?")
+    if not base.endswith("/"):
+        base += "/"
+    return base + sep + query
 
 
 def endpoint_app(path: str) -> str:

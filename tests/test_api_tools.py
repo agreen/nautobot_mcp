@@ -1,12 +1,9 @@
 """The Nautobot-facing tools against a fake Nautobot REST API (tests/fake_nautobot.py)."""
 
 import json
-import re
-import zlib
 from unittest.mock import patch
 
 import pytest
-from chromadb import EmbeddingFunction
 from fastmcp import Client
 
 from nautobot_mcp.helpers.api_hints import (
@@ -22,50 +19,7 @@ from nautobot_mcp.helpers.tool_handlers import (
 from nautobot_mcp.main import build_app
 from nautobot_mcp.utils.config import Config
 from tests.fake_nautobot import READONLY_TOKEN, FakeNautobot, serve
-
-
-class BowEmbedding(EmbeddingFunction):
-    """Deterministic bag-of-words embedding: similar wording lands close together."""
-
-    def __init__(self, *args, **kwargs):
-        pass
-
-    def __call__(self, input):
-        out = []
-        for text in input:
-            vec = [0.0] * 256
-            for word in re.findall(r"[a-z]+", text.lower()):
-                vec[zlib.crc32(word.encode()) % 256] += 1.0
-            norm = sum(x * x for x in vec) ** 0.5 or 1.0
-            out.append([x / norm for x in vec])
-        return out
-
-    @staticmethod
-    def name():
-        return "bow"
-
-
-@pytest.fixture
-def nautobot(monkeypatch):
-    app = FakeNautobot(token="secret", slow_seconds=3)
-    server = serve(app)
-    url = f"http://127.0.0.1:{server.server_port}"
-    # get_headers/get_full_url are classmethods, so patch the class, not the instance
-    for name, value in {
-        "NAUTOBOT_URL": url,
-        "NAUTOBOT_BASE_URL": url + "/api",
-        "GLOBAL_TOOL_PROMPT": url + "/api/swagger.json",
-        "NAUTOBOT_TOKEN": "secret",
-        "SSL_VERIFY": True,
-        "API_TIMEOUT": 10,
-        "SCHEMA_TIMEOUT": 10,
-        "DEFAULT_DEPTH": 2,
-        "MAX_RESPONSE_CHARS": 60000,
-        "READY_WAIT": 0.0,
-    }.items():
-        monkeypatch.setattr(Config, name, value)
-    yield app
-    server.shutdown()
+from tests.support import BowEmbedding
 
 
 @pytest.fixture
@@ -163,7 +117,7 @@ async def test_schema_search_results_are_compact_and_actionable(searcher):
     result = parse(await handle_api_request_schema("create a new device", 8, searcher))
     by_key = {(e["method"], e["path"]): e for e in result["matching_endpoints"]}
     post = by_key[("POST", "/dcim/devices/")]
-    assert post["body_fields"][0].startswith("device_type (string, required)")
+    assert post["body_fields"][0].startswith("device_type (object, required)")
     assert any(f.startswith("tags (array of string)") for f in post["body_fields"])
     assert all(not e["path"].startswith("/api") for e in result["matching_endpoints"])
     assert "nautobot_dynamic_api_request" in result["how_to_call"]
@@ -205,7 +159,7 @@ async def test_get_list_adds_depth_and_explains_paging(nautobot):
     out = parse(await handle_dynamic_api_request("GET", "/dcim/devices/", {"limit": 5}))
     assert len(out["results"]) == 5 and out["count"] == 120
     assert "offset=5" in out["_mcp_hint"]
-    assert nautobot.requests[-1][2]["depth"] == ["2"]  # server-side default applied
+    assert nautobot.requests[-1][2]["depth"] == ["0"]  # server-side default applied
 
 
 @pytest.mark.asyncio
@@ -337,14 +291,14 @@ async def test_overview_resource_describes_the_connected_instance(searcher):
         text = (await client.read_resource("nautobot://api/overview"))[0].text
     out = parse(text)
     assert out["nautobot"]["available"] is True
-    assert out["nautobot"]["nautobot_version"] == "2.3.4"
+    assert out["nautobot"]["nautobot_version"] == "3.0.2"
     assert set(out["nautobot"]["plugins"]) == {
         "nautobot_golden_config",
         "nautobot_ssot",
     }
     apps = out["api"]["apps"]
     assert {"dcim", "ipam", "extras"} <= set(apps)
-    assert apps["dcim"]["resources"] == ["devices", "locations"]
+    assert apps["dcim"]["resources"] == ["devices", "location-types", "locations"]
     assert out["api"]["total_operations"] == len(searcher.list_endpoints())
 
 
@@ -391,7 +345,7 @@ async def test_conventions_guide_is_served_and_matches_the_tools(nautobot):
         "relative to `/api`" in guide and "PATCH" in guide and "confirmation" in guide
     )
     desc = tools["nautobot_dynamic_api_request"].description
-    assert "relative to /api" in desc and "depth 2" in desc and "Confirm" in desc
+    assert "relative to /api" in desc and "Confirm" in desc
     assert len(desc) < 400
     assert "never guess" in tools["nautobot_openapi_api_request_schema"].description
 
@@ -450,7 +404,7 @@ def test_check_reports_version_schema_and_auth(nautobot, capsys, monkeypatch):
     assert results["OpenAPI Schema"][0] and "operations" in results["OpenAPI Schema"][1]
     assert results["API Endpoint"][0]
     assert results["Authentication"][0]
-    assert results["Nautobot version"][0] and "2.3.4" in results["Nautobot version"][1]
+    assert results["Nautobot version"][0] and "3.0.2" in results["Nautobot version"][1]
     assert "nautobot_golden_config" in results["Nautobot version"][1]
 
     monkeypatch.setattr(Config, "NAUTOBOT_TOKEN", "wrong")

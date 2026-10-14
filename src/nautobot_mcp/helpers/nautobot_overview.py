@@ -36,13 +36,20 @@ def fetch_instance_info() -> Dict[str, Any]:
     except Exception as e:  # noqa: BLE001 - descriptive failure is the result
         return {"available": False, "error": f"{type(e).__name__}: {e}"}
 
-    plugins = raw.get("plugins") or {}
+    # Nautobot 3 reports apps under `nautobot-apps`; `plugins` is the deprecated name (and is
+    # slated for removal), so read both and let the new key win.
+    plugins: Dict[str, Any] = {}
+    for key in ("plugins", "nautobot-apps"):
+        value = raw.get(key) or {}
+        plugins.update(
+            value if isinstance(value, dict) else {name: None for name in value}
+        )
     return {
         "available": True,
         "nautobot_version": raw.get("nautobot-version"),
         "python_version": raw.get("python-version"),
         "django_version": raw.get("django-version"),
-        "plugins": plugins if isinstance(plugins, dict) else list(plugins),
+        "plugins": plugins,
         "installed_app_count": len(raw.get("installed-apps") or {}),
     }
 

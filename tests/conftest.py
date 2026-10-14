@@ -19,3 +19,13 @@ def _isolated_data_dir(tmp_path, monkeypatch):
     _reset_path_state()
     yield
     _reset_path_state()
+
+
+@pytest.fixture
+def nautobot(monkeypatch):
+    """A running fake Nautobot (OpenAPI 3, like the real one) that the config points at."""
+    from tests.support import start_fake
+
+    app, server = start_fake(monkeypatch)
+    yield app
+    server.shutdown()

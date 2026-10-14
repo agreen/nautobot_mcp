@@ -2,25 +2,29 @@
 """A small fake Nautobot REST API for tests and manual testing of the MCP server.
 
 It imitates the parts of Nautobot's API the MCP server relies on, closely enough to exercise
-every code path without a real instance:
+every code path without a real instance. Details follow Nautobot's own source (drf-spectacular
+with ``SCHEMA_PATH_PREFIX_TRIM``, ``COMPONENT_SPLIT_REQUEST`` and ``COMPONENT_SPLIT_PATCH``):
 
-* ``GET /api/swagger.json``  Swagger 2.0 document (``basePath: /api``, relative paths,
-  ``definitions`` for request bodies, ``readOnly`` fields, many filter parameters)
-* ``GET /api/status/``       version / plugin information
-* locations, devices and IP addresses with paging, filters (``name``, ``name__ic``, ``q``,
-  ``location``), ``depth``, detail GET, POST (400 on invalid bodies), PATCH, PUT and DELETE
+* ``GET /api/swagger.json``  OpenAPI 3 document: paths relative to ``/api``, request bodies in
+  ``#/components/schemas/<Name>Request`` / ``Patched<Name>Request``, many filter parameters.
+  ``--openapi 2`` serves the older Swagger 2.0 shape instead.
+* ``GET /api/status/``       ``nautobot-version`` and ``nautobot-apps`` (``--legacy-plugins-key``
+  adds the old ``plugins`` key)
+* locations, devices, IP addresses and prefixes with paging, name-or-UUID filters, ``__ic`` style
+  lookups, ``q`` search, ``depth`` (related objects are minimal references at depth 0 and carry
+  ``display``/``name`` from depth 1), detail GET, POST (400 on invalid bodies), PATCH, PUT, DELETE
+* reference lists: statuses, roles, location types, tenants
 * auth: ``401`` for a wrong token, ``403`` for writes made with the read-only token
 * ``GET /api/slow/``         sleeps (for timeout tests)
 
 Run it standalone::
 
     python tests/fake_nautobot.py --port 8080 --token secret
-    nautobot-mcp --check   # with NAUTOBOT_URL=http://127.0.0.1:8080 NAUTOBOT_TOKEN=secret
-
-Options let you make the schema huge (``--extra-endpoints 2000``) or slow (``--schema-delay 5``).
+    NAUTOBOT_URL=http://127.0.0.1:8080 NAUTOBOT_TOKEN=secret nautobot-mcp --check
 """
 
 import argparse
+import ipaddress
 import json
 import threading
 import time
@@ -29,8 +33,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
-NAUTOBOT_VERSION = "2.3.4"
+NAUTOBOT_VERSION = "3.0.2"
 READONLY_TOKEN = "readonly-token"
+APPS = {"nautobot_golden_config": "3.0.1", "nautobot_ssot": "4.1.0"}
 
 _COMMON_FILTERS = [
     "name",
@@ -44,6 +49,7 @@ _COMMON_FILTERS = [
 ]
 
 
+# --------------------------------------------------------------------------- schema
 def _query_param(
     name: str, type_: str = "string", description: str = ""
 ) -> Dict[str, Any]:
@@ -71,174 +77,295 @@ def _list_params(extra: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     return params
 
 
-def build_schema(extra_endpoints: int = 0) -> Dict[str, Any]:
-    """The Swagger document served at /api/swagger.json."""
+def _prop(type_: str, **kw: Any) -> Dict[str, Any]:
+    return {"type": type_, **kw}
 
-    def ref(name: str) -> Dict[str, str]:
-        return {"$ref": f"#/definitions/{name}"}
 
-    def body(name: str) -> Dict[str, Any]:
-        return {"name": "data", "in": "body", "required": True, "schema": ref(name)}
+# name -> (required fields, properties); every definition is emitted for both formats
+_OBJECTS: Dict[str, Tuple[List[str], Dict[str, Any]]] = {
+    "Location": (
+        ["name", "location_type", "status"],
+        {
+            "id": _prop("string", format="uuid", readOnly=True),
+            "url": _prop("string", readOnly=True),
+            "name": _prop("string", description="Name of the location"),
+            "location_type": "REF",
+            "status": "REF",
+            "parent": "REF",
+            "description": _prop("string"),
+            "custom_fields": _prop("object"),
+        },
+    ),
+    "Device": (
+        ["name", "device_type", "role", "location", "status"],
+        {
+            "id": _prop("string", format="uuid", readOnly=True),
+            "display": _prop("string", readOnly=True),
+            "name": _prop("string", description="Device name"),
+            "device_type": "REF",
+            "role": "REF",
+            "location": "REF",
+            "status": "REF",
+            "platform": "REF",
+            "tenant": "REF",
+            "serial": _prop("string"),
+            "tags": _prop("array", items={"type": "string"}),
+            "custom_fields": _prop("object"),
+        },
+    ),
+    "IPAddress": (
+        ["address", "status"],
+        {
+            "id": _prop("string", format="uuid", readOnly=True),
+            "address": _prop(
+                "string", description="IP address with mask, e.g. 10.0.0.1/24"
+            ),
+            "status": "REF",
+            "description": _prop("string"),
+        },
+    ),
+    "Prefix": (
+        ["prefix", "status"],
+        {
+            "id": _prop("string", format="uuid", readOnly=True),
+            "prefix": _prop("string", description="Network in CIDR notation"),
+            "status": "REF",
+            "location": "REF",
+            "tenant": "REF",
+            "description": _prop("string"),
+        },
+    ),
+}
 
-    id_param = {
-        "name": "id",
-        "in": "path",
-        "required": True,
-        "type": "string",
-        "format": "uuid",
+_ROUTES: List[Tuple[str, str, str, str, List[str]]] = [
+    # app, resource, object name, human label, extra filters
+    ("dcim", "locations", "Location", "location", ["location_type", "parent"]),
+    (
+        "dcim",
+        "devices",
+        "Device",
+        "device",
+        ["location", "role", "serial", "device_type", "platform"],
+    ),
+    ("ipam", "ip-addresses", "IPAddress", "IP address", ["address", "parent", "host"]),
+    (
+        "ipam",
+        "prefixes",
+        "Prefix",
+        "prefix",
+        ["prefix", "prefix_exact", "within", "contains", "location"],
+    ),
+]
+
+
+def _components(openapi: int) -> Dict[str, Any]:
+    """Request-body schemas, keyed by component name."""
+    schemas: Dict[str, Any] = {
+        "ObjectRef": {
+            "type": "object",
+            "description": "Reference to another object by id or natural key",
+            "properties": {
+                "id": {"type": "string", "format": "uuid"},
+                "name": {"type": "string"},
+            },
+        },
+        "StatusEnum": {"type": "string", "enum": ["active", "reserved", "deprecated"]},
     }
-    paths: Dict[str, Any] = {}
-    for app, resource, definition, label, filters in [
-        (
-            "dcim",
-            "locations",
-            "WritableLocation",
-            "location",
-            ["location_type", "parent"],
-        ),
-        (
-            "dcim",
-            "devices",
-            "WritableDevice",
-            "device",
-            ["location", "role", "serial", "device_type"],
-        ),
-        (
-            "ipam",
-            "ip-addresses",
-            "WritableIPAddress",
-            "IP address",
-            ["address", "parent", "namespace"],
-        ),
-    ]:
-        base = f"/{app}/{resource}/"
-        paths[base] = {
-            "get": {
-                "operationId": f"{app}_{resource}_list",
-                "description": f"List {label}s. Supports filtering and pagination.",
-                "parameters": _list_params(filters),
-            },
-            "post": {
-                "operationId": f"{app}_{resource}_create",
-                "description": f"Create a new {label}.",
-                "parameters": [body(definition)],
-            },
+    for name, (required, props) in _OBJECTS.items():
+        built: Dict[str, Any] = {}
+        for prop_name, spec in props.items():
+            if spec == "REF":
+                if prop_name == "status" and name == "IPAddress":
+                    built[prop_name] = {
+                        "allOf": [{"$ref": "#/components/schemas/StatusEnum"}]
+                    }
+                else:
+                    built[prop_name] = {
+                        "allOf": [{"$ref": "#/components/schemas/ObjectRef"}]
+                    }
+            else:
+                built[prop_name] = spec
+        schemas[f"{name}Request"] = {
+            "type": "object",
+            "properties": built,
+            "required": required,
         }
-        paths[base + "{id}/"] = {
-            "get": {
-                "operationId": f"{app}_{resource}_read",
-                "description": f"Retrieve a {label} by its UUID.",
-                "parameters": [id_param],
-            },
-            "put": {
-                "operationId": f"{app}_{resource}_update",
-                "description": f"Replace a {label} (all fields).",
-                "parameters": [body(definition), id_param],
-            },
-            "patch": {
-                "operationId": f"{app}_{resource}_partial_update",
-                "description": f"Update some fields of a {label}.",
-                "parameters": [body(definition), id_param],
-            },
-            "delete": {
-                "operationId": f"{app}_{resource}_delete",
-                "description": f"Delete a {label}.",
-                "parameters": [id_param],
-            },
-        }
-    paths["/extras/statuses/"] = {
-        "get": {
-            "operationId": "extras_statuses_list",
-            "description": "List statuses (objects such as devices and IPs refer to these).",
-            "parameters": _list_params(),
-        }
-    }
-    paths["/status/"] = {
-        "get": {
-            "operationId": "status_list",
-            "description": "Nautobot instance status.",
-            "parameters": [],
-        }
-    }
-    paths["/slow/"] = {
-        "get": {
-            "operationId": "slow_list",
-            "description": "A deliberately slow endpoint.",
-            "parameters": [],
-        }
-    }
-    for i in range(extra_endpoints):
-        paths[f"/plugins/widgets{i}/"] = {
-            "get": {
-                "operationId": f"plugins_widgets{i}_list",
-                "description": f"List widget type {i} objects provided by a plugin.",
-                "parameters": _list_params(),
+        schemas[f"Patched{name}Request"] = {"type": "object", "properties": built}
+    return schemas
+
+
+def build_schema(extra_endpoints: int = 0, openapi: int = 3) -> Dict[str, Any]:
+    """The schema document served at /api/swagger.json (OpenAPI 3 by default, like Nautobot)."""
+    v3 = openapi == 3
+
+    def param(p: Dict[str, Any]) -> Dict[str, Any]:
+        if not v3:
+            return p
+        out = {k: v for k, v in p.items() if k != "type"}
+        out["schema"] = {"type": p["type"]}
+        return out
+
+    id_param = {"name": "id", "in": "path", "required": True, "type": "string"}
+    components = _components(openapi)
+
+    def body_ops(request_name: str) -> Dict[str, Any]:
+        if v3:
+            media = {"schema": {"$ref": f"#/components/schemas/{request_name}"}}
+            return {
+                "requestBody": {
+                    "content": {
+                        "application/json": media,
+                        "multipart/form-data": media,
+                    },
+                    "required": True,
+                }
+            }
+        # Swagger 2.0: the definition is flattened to a plain object definition
+        return {
+            "_swagger2_body": {
+                "name": "data",
+                "in": "body",
+                "required": True,
+                "schema": {"$ref": f"#/definitions/{request_name}"},
             }
         }
 
-    def prop(type_: str, **kw: Any) -> Dict[str, Any]:
-        return {"type": type_, **kw}
+    def operation(
+        op_id: str,
+        description: str,
+        params: List[Dict[str, Any]],
+        body: Optional[str] = None,
+    ):
+        op: Dict[str, Any] = {
+            "operationId": op_id,
+            "description": description,
+            "parameters": [param(p) for p in params],
+        }
+        if body:
+            extra = body_ops(body)
+            if "_swagger2_body" in extra:
+                op["parameters"] = [extra["_swagger2_body"], *op["parameters"]]
+            else:
+                op.update(extra)
+        return op
 
-    definitions = {
-        "WritableLocation": {
-            "required": ["name", "location_type", "status"],
-            "properties": {
-                "id": prop("string", format="uuid", readOnly=True),
-                "url": prop("string", readOnly=True),
-                "name": prop("string", description="Name of the location"),
-                "location_type": prop("string", description="Location type (UUID)"),
-                "status": prop("string", description="Status (UUID or name)"),
-                "parent": prop("string", description="Parent location (UUID)"),
-                "description": prop("string"),
-                "custom_fields": prop("object"),
-            },
-        },
-        "WritableDevice": {
-            "required": ["name", "device_type", "role", "location", "status"],
-            "properties": {
-                "id": prop("string", format="uuid", readOnly=True),
-                "display": prop("string", readOnly=True),
-                "name": prop("string", description="Device name"),
-                "device_type": prop("string", description="Device type (UUID)"),
-                "role": prop("string", description="Role (UUID)"),
-                "location": prop("string", description="Location (UUID)"),
-                "status": prop("string", description="Status (UUID or name)"),
-                "serial": prop("string"),
-                "tags": prop("array", items={"type": "string"}),
-                "custom_fields": prop("object"),
-            },
-        },
-        "WritableIPAddress": {
-            "required": ["address", "status"],
-            "properties": {
-                "id": prop("string", format="uuid", readOnly=True),
-                "address": prop(
-                    "string", description="IP address with mask, e.g. 10.0.0.1/24"
-                ),
-                "status": prop("string", enum=["active", "reserved", "deprecated"]),
-                "description": prop("string"),
-            },
-        },
+    paths: Dict[str, Any] = {}
+    for app, resource, obj, label, filters in _ROUTES:
+        base = f"/{app}/{resource}/"
+        paths[base] = {
+            "get": operation(
+                f"{app}_{resource}_list",
+                f"List {label}s. Supports filtering and pagination.",
+                _list_params(filters),
+            ),
+            "post": operation(
+                f"{app}_{resource}_create",
+                f"Create a new {label}.",
+                [],
+                f"{obj}Request",
+            ),
+        }
+        paths[base + "{id}/"] = {
+            "get": operation(
+                f"{app}_{resource}_retrieve",
+                f"Retrieve a {label} by its UUID.",
+                [id_param],
+            ),
+            "put": operation(
+                f"{app}_{resource}_update",
+                f"Replace a {label} (all fields).",
+                [id_param],
+                f"{obj}Request",
+            ),
+            "patch": operation(
+                f"{app}_{resource}_partial_update",
+                f"Update some fields of a {label}.",
+                [id_param],
+                f"Patched{obj}Request",
+            ),
+            "delete": operation(
+                f"{app}_{resource}_destroy", f"Delete a {label}.", [id_param]
+            ),
+        }
+    for app, resource, label in [
+        ("extras", "statuses", "status"),
+        ("extras", "roles", "role"),
+        ("dcim", "location-types", "location type"),
+        ("tenancy", "tenants", "tenant"),
+    ]:
+        paths[f"/{app}/{resource}/"] = {
+            "get": operation(
+                f"{app}_{resource}_list", f"List {label}s.", _list_params()
+            )
+        }
+    paths["/status/"] = {
+        "get": operation("status_retrieve", "Nautobot instance status.", [])
     }
+    paths["/slow/"] = {
+        "get": operation("slow_list", "A deliberately slow endpoint.", [])
+    }
+    for i in range(extra_endpoints):
+        paths[f"/plugins/widgets{i}/"] = {
+            "get": operation(
+                f"plugins_widgets{i}_list",
+                f"List widget type {i} objects provided by a plugin.",
+                _list_params(),
+            )
+        }
+
+    if v3:
+        return {
+            "openapi": "3.0.3",
+            "info": {"title": "API Documentation", "version": NAUTOBOT_VERSION},
+            "servers": [{"url": "/api"}],
+            "paths": paths,
+            "components": {"schemas": components},
+        }
     return {
         "swagger": "2.0",
         "info": {"title": "Nautobot API", "version": NAUTOBOT_VERSION},
         "basePath": "/api",
         "paths": paths,
-        "definitions": definitions,
+        "definitions": components,
     }
+
+
+# --------------------------------------------------------------------------- data + behaviour
+_REF_KINDS = {
+    "status": "extras.status",
+    "role": "extras.role",
+    "location_type": "dcim.locationtype",
+    "location": "dcim.location",
+    "parent": "dcim.location",
+    "device_type": "dcim.devicetype",
+    "platform": "dcim.platform",
+    "tenant": "tenancy.tenant",
+}
+
+
+_FIELD_REFKIND = {
+    "status": "statuses",
+    "role": "roles",
+    "location_type": "location_types",
+    "tenant": "tenants",
+}
 
 
 class FakeNautobot:
     """In-memory data plus request handling; wrapped by an HTTP server in ``serve``."""
 
+    # path -> (object name, required fields)
     RESOURCES = {
-        "/dcim/locations/": ("WritableLocation", ["name", "location_type", "status"]),
-        "/dcim/devices/": (
-            "WritableDevice",
-            ["name", "device_type", "role", "location", "status"],
-        ),
-        "/ipam/ip-addresses/": ("WritableIPAddress", ["address", "status"]),
+        "/dcim/locations/": ("Location", _OBJECTS["Location"][0]),
+        "/dcim/devices/": ("Device", _OBJECTS["Device"][0]),
+        "/ipam/ip-addresses/": ("IPAddress", _OBJECTS["IPAddress"][0]),
+        "/ipam/prefixes/": ("Prefix", _OBJECTS["Prefix"][0]),
+    }
+    REFERENCE = {
+        "/extras/statuses/": "statuses",
+        "/extras/roles/": "roles",
+        "/dcim/location-types/": "location_types",
+        "/tenancy/tenants/": "tenants",
     }
 
     def __init__(
@@ -247,21 +374,48 @@ class FakeNautobot:
         schema_delay: float = 0.0,
         extra_endpoints: int = 0,
         slow_seconds: float = 3.0,
+        openapi: int = 3,
+        legacy_plugins_key: bool = False,
     ) -> None:
         self.token = token
         self.schema_delay = schema_delay
         self.slow_seconds = slow_seconds
-        self.schema = json.dumps(build_schema(extra_endpoints)).encode()
+        self.legacy_plugins_key = legacy_plugins_key
+        self.schema = json.dumps(build_schema(extra_endpoints, openapi)).encode()
         self.requests: List[
             Tuple[str, str, Dict[str, List[str]]]
         ] = []  # (method, path, query)
         self.store: Dict[str, Dict[str, Dict[str, Any]]] = {
             p: {} for p in self.RESOURCES
         }
+        self.reference: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self._lock = threading.Lock()
+
+        def ref_list(kind: str, names: List[str]) -> Dict[str, Dict[str, Any]]:
+            return {
+                (i := str(uuid.uuid4())): {
+                    "id": i,
+                    "name": n,
+                    "object_type": _REF_KINDS.get(kind, kind),
+                }
+                for n in names
+            }
+
+        self.reference = {
+            "statuses": ref_list("status", ["Active", "Planned", "Decommissioning"]),
+            "roles": ref_list("role", ["access", "core", "distribution"]),
+            "location_types": ref_list("location_type", ["Region", "Site"]),
+            "tenants": ref_list("tenant", ["Acme", "Globex"]),
+        }
+        self._by_name = {
+            kind: {obj["name"]: obj for obj in objs.values()}
+            for kind, objs in self.reference.items()
+        }
+        site = self._by_name["location_types"]["Site"]
+        active = self._by_name["statuses"]["Active"]
         loc = self._create(
             "/dcim/locations/",
-            {"name": "DFW1", "location_type": "Site", "status": "Active"},
+            {"name": "DFW1", "location_type": site["id"], "status": active["id"]},
         )
         for i in range(1, 121):
             self._create(
@@ -269,14 +423,30 @@ class FakeNautobot:
                 {
                     "name": f"switch{i:03d}" if i % 2 else f"router{i:03d}",
                     "device_type": "ex4300",
-                    "role": "access",
+                    "role": self._by_name["roles"]["access" if i <= 100 else "core"][
+                        "id"
+                    ],
                     "location": loc["id"],
-                    "status": "Active",
+                    "status": active["id"],
+                    "serial": f"SN{i:05d}",
                 },
             )
-        self._create(
-            "/ipam/ip-addresses/", {"address": "10.1.2.3/24", "status": "active"}
+        prefix = self._create(
+            "/ipam/prefixes/",
+            {"prefix": "10.1.2.0/24", "status": active["id"], "location": loc["id"]},
         )
+        self._create(
+            "/ipam/prefixes/", {"prefix": "10.1.0.0/16", "status": active["id"]}
+        )
+        for host in (3, 4, 5):
+            self._create(
+                "/ipam/ip-addresses/",
+                {
+                    "address": f"10.1.2.{host}/24",
+                    "status": active["id"],
+                    "parent": prefix["id"],
+                },
+            )
 
     # ------------------------------------------------------------------ data helpers
     def _create(self, path: str, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -285,34 +455,91 @@ class FakeNautobot:
         self.store[path][obj["id"]] = obj
         return obj
 
+    def _resolve_ref(self, field: str, value: Any, depth: int) -> Any:
+        """Render a stored reference (UUID, name or None) the way Nautobot would at ``depth``."""
+        if value is None or isinstance(value, dict):
+            return value
+        kind = _FIELD_REFKIND.get(field)
+        if kind:
+            obj = self.reference[kind].get(value) or self._by_name[kind].get(value)
+            if obj:
+                return self._render(obj, obj["object_type"], depth)
+        if field in ("location", "parent"):
+            target = self.store["/dcim/locations/"].get(value)
+            if target:
+                return self._render(target, "dcim.location", depth)
+        # an unknown reference (e.g. a device type given by name): minimal reference, named from depth 1
+        return self._render(
+            {"id": value, "name": str(value), "url": f"/api/{field}/{value}/"},
+            _REF_KINDS.get(field, field),
+            depth,
+        )
+
+    @staticmethod
+    def _render(obj: Dict[str, Any], object_type: str, depth: int) -> Dict[str, Any]:
+        base = {
+            "id": obj["id"],
+            "object_type": object_type,
+            "url": obj.get("url", f"/api/{object_type}/{obj['id']}/"),
+        }
+        if depth >= 1:
+            base.update(
+                {
+                    "display": obj.get("name", obj["id"]),
+                    "name": obj.get("name", obj["id"]),
+                }
+            )
+        return base
+
     def _present(self, path: str, obj: Dict[str, Any], depth: int) -> Dict[str, Any]:
         out = dict(obj)
-        if path == "/dcim/devices/" and depth >= 1:
-            loc = self.store["/dcim/locations/"].get(obj.get("location"))
-            if loc:
-                out["location"] = {
-                    "id": loc["id"],
-                    "name": loc["name"],
-                    "url": loc["url"],
-                }
+        for field in (
+            "status",
+            "role",
+            "location_type",
+            "location",
+            "parent",
+            "tenant",
+            "platform",
+            "device_type",
+        ):
+            if field in out:
+                out[field] = self._resolve_ref(field, out[field], depth)
+        if path == "/dcim/devices/":
+            out["display"] = obj["name"]
+            out["primary_ip4"] = None
         if depth >= 2:
             out["_depth_note"] = (
                 "x" * 300
             )  # make depth visibly increase the payload size
         return out
 
-    @staticmethod
+    def _matches_ref(self, obj: Dict[str, Any], field: str, wanted: List[str]) -> bool:
+        raw = obj.get(field)
+        if raw is None:
+            return False
+        names = {str(raw)}
+        for kind in ("statuses", "roles", "location_types", "tenants"):
+            hit = self.reference[kind].get(raw)
+            if hit:
+                names.add(hit["name"])
+        loc = self.store["/dcim/locations/"].get(raw)
+        if loc:
+            names.add(loc["name"])
+        return any(w in names for w in wanted)
+
     def _filters(
-        items: List[Dict[str, Any]], query: Dict[str, List[str]]
+        self, base: str, items: List[Dict[str, Any]], query: Dict[str, List[str]]
     ) -> List[Dict[str, Any]]:
         for key, values in query.items():
             if key in ("limit", "offset", "depth"):
                 continue
             if key == "q":
+                needle = values[0].lower()
                 items = [
                     i
                     for i in items
-                    if any(values[0].lower() in str(v).lower() for v in i.values())
+                    if any(needle in str(v).lower() for v in i.values())
                 ]
             elif key.endswith("__ic"):
                 field = key[:-4]
@@ -328,9 +555,47 @@ class FakeNautobot:
                     for i in items
                     if str(i.get(field, "")).lower().startswith(values[0].lower())
                 ]
+            elif key.endswith("__n"):
+                field = key[:-3]
+                items = [i for i in items if str(i.get(field)) not in values]
+            elif (
+                key
+                in ("prefix", "within", "within_include", "contains", "prefix_exact")
+                and base == "/ipam/prefixes/"
+            ):
+                items = [
+                    i for i in items if self._prefix_match(key, i["prefix"], values)
+                ]
+            elif key == "parent" and base == "/ipam/ip-addresses/":
+                items = [i for i in items if i.get("parent") in values]
+            elif key == "address" and base == "/ipam/ip-addresses/":
+                items = [
+                    i
+                    for i in items
+                    if i["address"] in values or i["address"].split("/")[0] in values
+                ]
+            elif key == "host" and base == "/ipam/ip-addresses/":
+                items = [i for i in items if i["address"].split("/")[0] in values]
+            elif key in _REF_KINDS:
+                items = [i for i in items if self._matches_ref(i, key, values)]
             else:
                 items = [i for i in items if str(i.get(key)) in values]
         return items
+
+    @staticmethod
+    def _prefix_match(kind: str, candidate: str, values: List[str]) -> bool:
+        net = ipaddress.ip_network(candidate, strict=False)
+        for v in values:
+            other = ipaddress.ip_network(v, strict=False)
+            if kind == "prefix_exact" and net == other:
+                return True
+            if kind == "within" and net != other and net.subnet_of(other):
+                return True
+            if kind in ("prefix", "within_include") and net.subnet_of(other):
+                return True
+            if kind == "contains" and other.subnet_of(net):
+                return True
+        return False
 
     # ------------------------------------------------------------------ request handling
     def handle(
@@ -342,7 +607,15 @@ class FakeNautobot:
         with self._lock:
             self.requests.append((method, path, query))
 
+        auth = headers.get("Authorization", "")
         if path == "/api/swagger.json":
+            # Nautobot requires authentication for its schema (SERVE_PERMISSIONS = IsAuthenticated)
+            if auth not in (f"Token {self.token}", f"Token {READONLY_TOKEN}"):
+                return (
+                    403,
+                    {"detail": "Authentication credentials were not provided."},
+                    {},
+                )
             time.sleep(self.schema_delay)
             return 200, self.schema, {}
         if path in ("/api", "/api/"):  # the API root is public in Nautobot
@@ -354,43 +627,46 @@ class FakeNautobot:
         if not path.startswith("/api/"):
             return 404, {"detail": "Not found."}, {}
 
-        auth = headers.get("Authorization", "")
         if auth not in (f"Token {self.token}", f"Token {READONLY_TOKEN}"):
             return 401, {"detail": "Invalid token."}, {}
         readonly = auth == f"Token {READONLY_TOKEN}"
         rel = path[len("/api") :]
 
         if rel == "/status/":
-            return (
-                200,
-                {
-                    "nautobot-version": NAUTOBOT_VERSION,
-                    "django-version": "4.2.16",
-                    "python-version": "3.11.9",
-                    "plugins": {
-                        "nautobot_golden_config": "2.1.0",
-                        "nautobot_ssot": "3.2.0",
-                    },
-                    "installed-apps": {"nautobot": "2.3.4", "django": "4.2.16"},
-                },
-                {},
-            )
+            payload: Dict[str, Any] = {
+                "nautobot-version": NAUTOBOT_VERSION,
+                "django-version": "4.2.16",
+                "python-version": "3.12.4",
+                "installed-apps": {"nautobot": NAUTOBOT_VERSION, "django": "4.2.16"},
+                "nautobot-apps": APPS,
+                "celery-workers-running": 1,
+            }
+            if self.legacy_plugins_key:
+                payload["plugins"] = APPS
+            return 200, payload, {}
         if rel == "/slow/":
             time.sleep(self.slow_seconds)
             return 200, {"slow": True}, {}
-        if rel == "/extras/statuses/":
+        if rel in self.REFERENCE:
+            items = list(self.reference[self.REFERENCE[rel]].values())
+            items = self._filters(rel, items, query)
+            depth = self._depth(query)
+            limit = int(query.get("limit", ["50"])[0]) or 50
+            offset = int(query.get("offset", ["0"])[0])
+            page = items[offset : offset + limit]
             return (
                 200,
                 {
-                    "count": 2,
+                    "count": len(items),
                     "next": None,
                     "previous": None,
-                    "results": [{"name": "Active"}, {"name": "Planned"}],
+                    "results": [
+                        self._render(i, i["object_type"], max(depth, 1)) for i in page
+                    ],
                 },
                 {},
             )
 
-        # resource routes
         for base in self.RESOURCES:
             if rel == base:
                 return self._collection(method, base, query, body, readonly)
@@ -409,7 +685,7 @@ class FakeNautobot:
 
     def _collection(self, method, base, query, body, readonly):
         if method == "GET":
-            items = self._filters(list(self.store[base].values()), query)
+            items = self._filters(base, list(self.store[base].values()), query)
             limit = int(query.get("limit", ["50"])[0]) or 50
             offset = int(query.get("offset", ["0"])[0])
             page = items[offset : offset + limit]
@@ -533,11 +809,25 @@ def main() -> None:
     parser.add_argument(
         "--extra-endpoints", type=int, default=0, help="add N filler endpoints"
     )
+    parser.add_argument(
+        "--openapi", type=int, choices=(2, 3), default=3, help="schema format to serve"
+    )
+    parser.add_argument(
+        "--legacy-plugins-key",
+        action="store_true",
+        help="also return the old `plugins` key",
+    )
     args = parser.parse_args()
-    app = FakeNautobot(args.token, args.schema_delay, args.extra_endpoints)
+    app = FakeNautobot(
+        args.token,
+        args.schema_delay,
+        args.extra_endpoints,
+        openapi=args.openapi,
+        legacy_plugins_key=args.legacy_plugins_key,
+    )
     server = serve(app, args.host, args.port)
     print(
-        f"Fake Nautobot {NAUTOBOT_VERSION} on http://{args.host}:{server.server_port}  "
+        f"Fake Nautobot {NAUTOBOT_VERSION} (OpenAPI {args.openapi}) on http://{args.host}:{server.server_port}  "
         f"token={args.token!r}  read-only token={READONLY_TOKEN!r}",
         flush=True,
     )

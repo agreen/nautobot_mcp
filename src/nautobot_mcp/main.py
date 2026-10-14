@@ -681,6 +681,23 @@ Examples:
         )
 
     parser.add_argument(
+        "--diagnose",
+        action="store_true",
+        help="Describe the shape of the configured Nautobot (schema format, filters, response "
+        "shapes) as JSON that is safe to share: no values, names, UUIDs or token",
+    )
+    parser.add_argument(
+        "--include-names",
+        action="store_true",
+        help="With --diagnose: also list the names of statuses, roles, location types, tenants",
+    )
+    parser.add_argument(
+        "--output",
+        metavar="FILE",
+        help="With --diagnose: write the report to FILE instead of stdout",
+    )
+
+    parser.add_argument(
         "--print-instructions",
         action="store_true",
         help="Print the server instructions (for pasting into hosts that do not forward "
@@ -713,6 +730,13 @@ Examples:
 async def main():
     """Main entrypoint that dispatches to the appropriate transport mode."""
     args = parse_arguments()
+
+    if args.diagnose:
+        from nautobot_mcp import diagnose
+
+        sys.exit(
+            await asyncio.to_thread(diagnose.main, args.include_names, args.output)
+        )
 
     if args.print_instructions:
         print(_instructions(config.ENABLE_KB))

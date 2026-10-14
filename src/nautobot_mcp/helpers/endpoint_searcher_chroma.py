@@ -10,6 +10,7 @@ import urllib3
 from chromadb import PersistentClient
 from chromadb.config import Settings
 
+from nautobot_mcp.helpers.openapi import body_fields, schema_format
 from nautobot_mcp.utils import LocalEmbeddingFunction, config, get_chroma_db_path
 
 # Disable SSL warnings if SSL verification is disabled
@@ -22,42 +23,7 @@ logger.setLevel(logging.INFO)
 
 
 # Bump when the stored metadata changes shape so existing indexes are rebuilt
-_INDEX_FORMAT = 2
-_MAX_BODY_FIELDS = 80
-
-
-def _body_fields(operation: dict, definitions: dict) -> list:
-    """Writable request-body fields of an operation, resolved from the schema definitions."""
-    for param in operation.get("parameters", []):
-        if param.get("in") != "body":
-            continue
-        ref = (param.get("schema") or {}).get("$ref")
-        if not ref:
-            return []
-        definition = definitions.get(ref.rsplit("/", 1)[-1]) or {}
-        required = set(definition.get("required") or [])
-        fields = []
-        for name, spec in (definition.get("properties") or {}).items():
-            if spec.get("readOnly"):
-                continue
-            ftype = spec.get("type") or ("object" if "$ref" in spec else None)
-            if ftype == "array":
-                ftype = f"array of {(spec.get('items') or {}).get('type') or 'object'}"
-            description = " ".join(
-                str(spec.get("description") or spec.get("title") or "").split()
-            )
-            fields.append(
-                {
-                    "name": name,
-                    "type": ftype,
-                    "required": name in required,
-                    "enum": spec.get("enum"),
-                    "description": description[:100],
-                }
-            )
-        fields.sort(key=lambda f: (not f["required"], f["name"]))
-        return fields[:_MAX_BODY_FIELDS]
-    return []
+_INDEX_FORMAT = 3
 
 
 class EndpointSearcherChroma:
@@ -67,6 +33,8 @@ class EndpointSearcherChroma:
         self.db_path: str = str(Path(get_chroma_db_path()) / "nautobot_api" / "db")
         # Why the last initialize_collection() returned False (None if it succeeded)
         self.last_error: Optional[Exception] = None
+        # Format/version of the schema that was indexed (see helpers.openapi.schema_format)
+        self.schema_info: dict = {}
 
         # Local ONNX embedding model (downloaded on first use into the data dir)
         self.embedding_function = LocalEmbeddingFunction()
@@ -166,7 +134,7 @@ class EndpointSearcherChroma:
             documents = []
             metadatas = []
             ids = []
-            definitions = data.get("definitions", {})
+            self.schema_info = schema_format(data)
             for path, methods in data.get("paths", {}).items():
                 for method, operation in methods.items():
                     if not isinstance(operation, dict):  # e.g. path-level "parameters"
@@ -180,7 +148,7 @@ class EndpointSearcherChroma:
                         "operation_id": operation.get("operationId", ""),
                         "description": operation.get("description", ""),
                         "parameters": operation.get("parameters", []),
-                        "body_fields": json.dumps(_body_fields(operation, definitions)),
+                        "body_fields": json.dumps(body_fields(operation, data)),
                     }
                     cleaned_metadata = self._clean_metadata(metadata)
                     documents.append(combined_text)
