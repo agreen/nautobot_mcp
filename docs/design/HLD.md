@@ -56,7 +56,7 @@ streamable-HTTP on an internal network; (c) developer laptop, stdio.
 | Source | Take | Leave |
 |--------|------|-------|
 | reshif/nautobot-mcp | `{summary,data,meta}` contract; budget enforcement; resolver with candidate lists; tool annotations; reference resources; prompts | single-commit maturity; no health/startup model |
-| bsmeding/nautobot-mcp-server | client-level write gate; tenant scoping at one choke point; plugin-module registry | raw-passthrough wrappers; mcp 2.x pin |
+| bsmeding/nautobot-mcp-server | client-level write gate; (its tenant scoping deliberately not copied: the Nautobot token is the boundary); plugin-module registry | raw-passthrough wrappers; mcp 2.x pin |
 | kvncampos upstream (our origin) | semantic schema/KB search idea | blocking startup |
 | rsp2k app | per-user `ObjectPermission` model (future) | in-process, IdP requirement |
 | ramixpe | GraphQL-backed composites (`describe_device`, topology); `schema_hints` | — |
@@ -113,7 +113,7 @@ Hard failures also set MCP `isError`. Details in SDS §2.
 - Read-only **by default** (`NAUTOBOT_MCP_READ_ONLY=true`). Enforced in the Gateway, not only by hiding tools; the generic request tool refuses non-GET (except known read-style POSTs: GraphQL, available-ips).
 - Nautobot token: read-only token recommended; never logged; redacted in diagnostics.
 - HTTP transport has **no inbound auth in v1**: bind `127.0.0.1` by default; docker compose publishes no port. Optional static bearer (`NAUTOBOT_MCP_AUTH_TOKEN`) is in scope for v1 if D6 = yes.
-- Optional tenant scope (`TENANT_SCOPE`) applied centrally in the Gateway (list filters, reads, writes).
+- **Data scoping is the token's job.** Restrict what the MCP can see by giving it a Nautobot token whose user has only the needed object permissions (e.g. one tenant). Nautobot enforces this server-side, including GraphQL and the generic request tool. The MCP has no tenant-scope setting in v1 (decided: it would duplicate Nautobot's permissions with gaps). Tools still accept an optional `tenant` *filter*.
 - Responses are untrusted data: fields copied from Nautobot are returned as data and never interpreted as instructions.
 
 ## 9. Observability and startup (implemented, retained)
@@ -128,8 +128,7 @@ Hard failures also set MCP `isError`. Details in SDS §2.
 ## 11. Configuration surface (v1)
 
 `NAUTOBOT_URL`, `NAUTOBOT_TOKEN`, `NAUTOBOT_VERIFY_SSL`/`CA_BUNDLE`, `NAUTOBOT_MCP_TRANSPORT|HOST|PORT`,
-`NAUTOBOT_MCP_READ_ONLY`, `…_TOOLSETS`, `…_DISABLED_TOOLS`, `…_PLUGINS` (override detection), `…_TENANT_SCOPE`,
-`…_MAX_RESPONSE_CHARS`, `…_TOOL_TIMEOUT`, `…_MAX_CONCURRENCY`, `…_DATA_DIR`, `…_ENABLE_KB`, `…_AUTH_TOKEN`.
+`NAUTOBOT_MCP_READ_ONLY`, `…_TOOLSETS`, `…_DISABLED_TOOLS`, `…_PLUGINS` (override detection), `…_MAX_RESPONSE_CHARS`, `…_TOOL_TIMEOUT`, `…_MAX_CONCURRENCY`, `…_DATA_DIR`, `…_ENABLE_KB`, `…_AUTH_TOKEN`.
 Single flat env-var set; no environment-profile mapping.
 
 ## 12. Decisions

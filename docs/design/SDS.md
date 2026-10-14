@@ -52,7 +52,7 @@ and `send(method, …)` used only by the guarded generic request tool.
   and transport errors twice with 0.25 s/0.5 s back-off; **never retry non-GET**.
 - Write gate: non-GET refused with `read_only` when `READ_ONLY`, except an allow-list of read-style
   POSTs (`/graphql/`, `…/available-ips/`, `…/available-prefixes/` **only GET-equivalent use**).
-- Tenant scope (if configured) injected into list params; object reads verified; creates carry tenant.
+- No tenant scoping: the Nautobot token's object permissions are the access boundary (HLD §8).
 - Normalises errors to `ApiError(status, detail, fields)`. Follows `next` URLs; rewrites host if
   the instance returns an internal hostname in `next` **[VERIFY]**.
 
