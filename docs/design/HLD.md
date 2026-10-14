@@ -136,12 +136,12 @@ Single flat env-var set; no environment-profile mapping.
 
 | ID | Decision | Recommendation | Status |
 |----|----------|----------------|--------|
-| D1 | Fork vs new project; package name (`nautobot-mcp` is taken on PyPI by bsmeding) | New repo, history preserved, MIT credit to Kevin Campos; new name | **OPEN** |
-| D2 | Keep embeddings for endpoint search? | BM25 default; embeddings optional extra | **OPEN** |
-| D3 | KB: keep, chunk at index time? | keep as optional extra; chunk | **OPEN** |
+| D1 | Fork vs new project; package name (`nautobot-mcp` and `nautobot-mcp-server` are taken on PyPI) | **New project.** History preserved, MIT credit to Kevin Campos. Name still to pick (candidates free on PyPI: `nautobot-sot-mcp`, `nautobot-mcp-toolkit`, `nautobot-ops-mcp`) | **DECIDED** (name open) |
+| D2 | Embeddings | BM25 for the structured API schema; embeddings only for the knowledge base (prose, conceptual queries), as an optional extra | **DECIDED** |
+| D3 | KB: keep, chunk at index time | Keep as optional extra; chunk by heading/function with path and line ranges | **DECIDED** |
 | D4 | GraphQL in v1 | yes, read-only | proposed |
 | D5 | Supported Nautobot versions | 2.3+ and 3.x; verify with `--diagnose` on real instance | **needs data** |
-| D6 | Inbound auth for HTTP | static bearer token optional in v1; OAuth later | **OPEN** |
+| D6 | Inbound auth for HTTP | Optional static bearer token in v1; OAuth later | **DECIDED** |
 | D7 | Write tools in v1 | none beyond generic request when `READ_ONLY=false` | proposed |
 | D8 | MCP SDK | stay on FastMCP 2.x, pinned `<3` | proposed |
 | D9 | Language of tool args | human names in, UUIDs accepted everywhere | proposed |
