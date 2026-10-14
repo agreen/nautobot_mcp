@@ -60,6 +60,9 @@ nav:
       - API Reference: api-reference.md
       - Troubleshooting: troubleshooting.md
       - Development: development.md
+  - Design:
+      - High-Level Design: design/HLD.md
+      - Software Design Spec: design/SDS.md
   - Contributing: contributing.md
   - Changelog: changelog.md
 
